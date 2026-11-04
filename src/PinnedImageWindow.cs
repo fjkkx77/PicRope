@@ -8,6 +8,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
+using System.Windows.Threading;
 using System.Windows.Media.Imaging;
 using Forms = System.Windows.Forms;
 
@@ -141,7 +142,7 @@ namespace ScreenLine
             };
             Loaded += delegate { dropStarted = clock.Elapsed.TotalSeconds; StartRendering(); };
             Closing += delegate { ReturnBounds = PhotoRect(); };
-            Closed += delegate { CompositionTarget.Rendering -= Render; };
+            Closed += delegate { StopRendering(); };
             bitmap = picture;
             photo.Source = bitmap;
             pictureScale = targetScale = FitScale(bitmap, screen);
@@ -234,12 +235,41 @@ namespace ScreenLine
             }
         }
 
+        // 缩放动画：每一步做完就在「程序空闲」优先级排下一步（低于输入），一步接一步地跑，滚轮永远先处理。
+        // - 不挂渲染回调：WPF 里渲染回调优先级高于输入，每帧改窗口（约 15ms，大图到 30~50ms）会把滚轮饿住
+        //   （实测第 3 格延迟 631ms、之后 1.8 秒内收不到）；订阅渲染回调还会让 WPF 每帧整窗重画，更慢
+        // - 不用计时器：受系统计时精度限制帧数偏少
+        // 实测（真实滚轮输入 15 格/每 20ms）：全部收到，延迟最大约 10~20ms
+        // 落下动画不需要响应输入，仍直接跟随渲染回调。
+        bool zoomLoop, stepQueued;
+
         void StartRendering()
         {
             if (rendering) return;
             rendering = true;
-            CompositionTarget.Rendering += Render;
+            if (IsHitTestVisible) zoomLoop = true;
+            else CompositionTarget.Rendering += Render;
             Render(null, EventArgs.Empty);
+            QueueZoomStep();
+        }
+
+        void QueueZoomStep()
+        {
+            if (!rendering || !zoomLoop || stepQueued) return;
+            stepQueued = true;
+            Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(delegate
+            {
+                stepQueued = false;
+                if (!rendering || !zoomLoop) return;
+                Render(this, EventArgs.Empty);
+                QueueZoomStep();
+            }));
+        }
+
+        void StopRendering()
+        {
+            rendering = false; lastZoomFrame = -1; zoomLoop = false;
+            CompositionTarget.Rendering -= Render;
         }
 
         void Render(object sender, EventArgs args)
@@ -267,8 +297,7 @@ namespace ScreenLine
             Position();
             if (IsHitTestVisible && pictureScale == targetScale)
             {
-                rendering = false; lastZoomFrame = -1;
-                CompositionTarget.Rendering -= Render;
+                StopRendering();
             }
         }
 
