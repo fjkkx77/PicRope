@@ -61,18 +61,18 @@ namespace ScreenLine.Tests
             Run("文字剪贴板不收集", delegate { Check(!ClipboardRules.IsPlainImage(new[] { "UnicodeText" })); });
             Run("只有左上角触发展开，顶部中间和右上角关闭按钮处不触发", delegate
             {
-                Check(RevealRules.InTopLeftCorner(0, 0, 0, 0, 1920, 0, 1) && RevealRules.InTopLeftCorner(39, 2, 0, 0, 1920, 0, 1));
-                Check(!RevealRules.InTopLeftCorner(40, 0, 0, 0, 1920, 0, 1) && !RevealRules.InTopLeftCorner(960, 0, 0, 0, 1920, 0, 1)
+                Check(RevealRules.InTopLeftCorner(0, 0, 0, 0, 1920, 0, 1) && RevealRules.InTopLeftCorner(27, 2, 0, 0, 1920, 0, 1));
+                Check(!RevealRules.InTopLeftCorner(28, 0, 0, 0, 1920, 0, 1) && !RevealRules.InTopLeftCorner(960, 0, 0, 0, 1920, 0, 1)
                     && !RevealRules.InTopLeftCorner(1919, 0, 0, 0, 1920, 0, 1));
                 Check(!RevealRules.InTopLeftCorner(10, 3, 0, 0, 1920, 0, 1));
             });
             Run("左上角触发区随缩放比例变化", delegate
             {
-                Check(RevealRules.InTopLeftCorner(59, 0, 0, 0, 2560, 0, 1.5) && !RevealRules.InTopLeftCorner(60, 0, 0, 0, 2560, 0, 1.5));
+                Check(RevealRules.InTopLeftCorner(41, 0, 0, 0, 2560, 0, 1.5) && !RevealRules.InTopLeftCorner(42, 0, 0, 0, 2560, 0, 1.5));
             });
             Run("左上角判定按每块屏幕自身的左边缘和任务栏位置", delegate
             {
-                Check(RevealRules.InTopLeftCorner(-1920, 0, -1920, 0, 0, 0, 1) && !RevealRules.InTopLeftCorner(-1880, 0, -1920, 0, 0, 0, 1));
+                Check(RevealRules.InTopLeftCorner(-1920, 0, -1920, 0, 0, 0, 1) && !RevealRules.InTopLeftCorner(-1892, 0, -1920, 0, 0, 0, 1) && RevealRules.InTopLeftCorner(-1893, 0, -1920, 0, 0, 0, 1));
                 Check(RevealRules.InTopLeftCorner(5, 47, 0, 0, 1920, 48, 1) && !RevealRules.InTopLeftCorner(5, 48, 0, 0, 1920, 48, 1));
             });
             Run("同尺寸不同图片有不同指纹", delegate { Check(ImageContent.HashPixels(Picture(20)) != ImageContent.HashPixels(Picture(80))); });
