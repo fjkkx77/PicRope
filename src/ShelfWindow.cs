@@ -239,6 +239,8 @@ namespace ScreenLine
                 pointer.Start();
             };
             Loaded += delegate { Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(delegate { if (!closing) MoveToDisplay(); })); };
+            // 空闲时先备好一个飞行动画窗口：现建一个要 50~100ms，正好卡在截图上绳那一下
+            Loaded += delegate { Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(delegate { if (!closing) ShotFlight.Prewarm(); })); };
             SizeChanged += delegate { UpdateAccessories(); LayoutCards(); };
             pointer.Tick += Tick;
             gallery.Changed += Update;
@@ -253,6 +255,7 @@ namespace ScreenLine
                 pointer.Stop();
                 StopRendering();
                 foreach (var flight in flights.ToArray()) flight.Close();
+                ShotFlight.CloseIdle();
                 gallery.Changed -= Update;
                 Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= DisplaysChanged;
                 foreach (var card in cards.Values) card.Dispose();
@@ -518,14 +521,14 @@ namespace ScreenLine
             Rect start = new Rect(left, top, width, height);
             if (item.Image.PixelWidth == bounds.Width && item.Image.PixelHeight == bounds.Height)
                 start = new Rect(bounds.Left, bounds.Top, bounds.Width, bounds.Height);
-            PlayFlight(new ShotFlight(Display, card, start, false, card.Land));
+            PlayFlight(ShotFlight.Take(Display, card, start, false, card.Land));
         }
 
         public void ShowDiscard(CaptureItem item)
         {
             ShotCard card;
             if (!Revealed || !cards.TryGetValue(item.Path, out card) || card.Flying) return;
-            PlayFlight(new ShotFlight(Display, card, card.PhotoRect(), true, delegate { }));
+            PlayFlight(ShotFlight.Take(Display, card, card.PhotoRect(), true, delegate { }));
         }
 
         public void ShowCollect(CaptureItem item)
@@ -534,7 +537,7 @@ namespace ScreenLine
             ShotCard card;
             if (!Revealed || !cards.TryGetValue(item.Path, out card) || card.Flying) return;
             peekUntil = DateTime.UtcNow.AddSeconds(2);
-            PlayFlight(new ShotFlight(Display, card, card.PhotoRect(), false, BasketReceived, null, delegate
+            PlayFlight(ShotFlight.Take(Display, card, card.PhotoRect(), false, BasketReceived, null, delegate
             {
                 Point mouth = basketImage.PointToScreen(PictureBasket.Mouth(Appearance));
                 double scale = WindowsNative.MonitorScale(Display);
@@ -561,14 +564,14 @@ namespace ScreenLine
             LayoutCards();
             viewport.UpdateLayout();
             scrollMotion.Target = Math.Max(0, Math.Min(content.Width - viewport.ViewportWidth, card.MountX + 82 - viewport.ViewportWidth / 2));
-            PlayFlight(new ShotFlight(Display, card, origin, false, delegate { card.Land(); ropeMotion.Velocity += 12; }, picture));
+            PlayFlight(ShotFlight.Take(Display, card, origin, false, delegate { card.Land(); ropeMotion.Velocity += 12; }, picture));
         }
 
         void PlayFlight(ShotFlight flight)
         {
             flights.Add(flight);
-            flight.Closed += delegate { flights.Remove(flight); };
-            flight.Show();
+            flight.Finished += delegate { flights.Remove(flight); };
+            flight.Play();
         }
 
         async Task ReleasePhoto(ShotCard card)
@@ -598,7 +601,7 @@ namespace ScreenLine
                     LayoutCards();
                     viewport.UpdateLayout();
                     scrollMotion.Target = Math.Max(0, Math.Min(content.Width - viewport.ViewportWidth, card.MountX + 82 - viewport.ViewportWidth / 2));
-                    PlayFlight(new ShotFlight(Display, card, bounds, false, card.Land, window.Picture));
+                    PlayFlight(ShotFlight.Take(Display, card, bounds, false, card.Land, window.Picture));
                 };
                 card.DetachPhoto();
                 ropeMotion.Velocity -= 24;
@@ -635,7 +638,7 @@ namespace ScreenLine
                 scrollHover.Stop(); trackingScrollHover = false;
                 Preview.Dismiss();
                 if (RopeHidden != null) RopeHidden();
-                foreach (var flight in flights.ToArray()) flight.Close();
+                foreach (var flight in flights.ToArray()) flight.Stop();
                 basketMotion.Snap(0); basketTurn.Angle = 0;
                 basketCounterMotion.Snap(1); basketCounterScale.ScaleX = basketCounterScale.ScaleY = 1;
                 envelopeImage.Reset();
