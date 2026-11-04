@@ -123,6 +123,12 @@ namespace ScreenLine.Tests
             toolBitmap.Freeze(); toolPixels.SetImage(toolBitmap); toolPixels.SetData(DataFormats.FileDrop, new[] { "C:\\不存在的截图文件.png" });
             var toolPicture = CapturePipeline.ReadImage(toolPixels, "PixPin").GetAwaiter().GetResult();
             Check(toolPicture != null && toolPicture.Extension == ".png" && ImageContent.Decode(toolPicture.Bytes).PixelWidth == 2, "截图软件的位图可读取，截图文件不存在也不影响");
+            string offFile;
+            Check(!ClipboardRules.IsImage(screenshotTool(), "PixPin", out offFile, false), "关闭截图软件收集后恢复原行为，不收 PixPin");
+            Check(CapturePipeline.ReadImage(toolPixels, "PixPin", false).GetAwaiter().GetResult() == null, "关闭截图软件收集后不读取它的位图");
+            Check(ClipboardRules.IsImage(wechat, "Weixin", out offFile, false) && offFile == "C:\\image.jpg", "关闭截图软件收集不影响微信图片");
+            var plainPixels = new DataObject(); plainPixels.SetImage(toolBitmap);
+            Check(CapturePipeline.ReadImage(plainPixels, "PixPin", false).GetAwaiter().GetResult() != null, "关闭截图软件收集不影响只有图片的普通复制");
             string fixture = Path.Combine(Path.GetTempPath(), "picrope-clipboard-" + Guid.NewGuid().ToString("N") + ".png");
             try
             {

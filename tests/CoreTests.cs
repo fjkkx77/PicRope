@@ -216,6 +216,16 @@ namespace ScreenLine.Tests
                 File.WriteAllText(Path.Combine(store.Root, "state.json"), "{\"Images\":[\"旧截图.png\"]}");
                 Check(new StateStore(store.Root).State.AutoHang);
             });
+            Run("截图软件收集开关保存后可恢复，旧版配置默认开启", delegate
+            {
+                var store = new StateStore(Path.Combine(root, "screenshot-tools-profile"));
+                Check(store.State.CollectScreenshotTools);
+                store.State.CollectScreenshotTools = false;
+                store.Save();
+                Check(!new StateStore(store.Root).State.CollectScreenshotTools);
+                File.WriteAllText(Path.Combine(store.Root, "state.json"), "{\"Images\":[\"旧截图.png\"]}");
+                Check(new StateStore(store.Root).State.CollectScreenshotTools);
+            });
             Run("顶部悬停展开默认开启，关闭和重新开启后可恢复", delegate
             {
                 var store = new StateStore(Path.Combine(root, "top-hover-profile"));
