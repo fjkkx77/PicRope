@@ -258,7 +258,7 @@ namespace ScreenLine
             {
                 if (!CollectClipboard || sequence == clipboardSequence) return;
                 clipboardSequence = sequence;
-                ClipboardPicture picture = await ReadClipboardImage(sequence);
+                ClipboardPicture picture = await ReadClipboardImage(sequence, gallery.Store.State.CollectScreenshotTools);
                 if (picture == null || disposed || !CollectClipboard || WindowsNative.GetClipboardSequenceNumber() != sequence) return;
                 ImageContent content = await Task.Run(() => ImageContent.Decode(picture.Bytes));
                 if (disposed || !CollectClipboard || WindowsNative.GetClipboardSequenceNumber() != sequence) return;
@@ -282,7 +282,7 @@ namespace ScreenLine
             finally { clipboardBusy = false; }
         }
 
-        internal static Task<ClipboardPicture> ReadClipboardImage(uint sequence)
+        internal static Task<ClipboardPicture> ReadClipboardImage(uint sequence, bool screenshotTools = true)
         {
             return WindowsClipboard.ReadOnSta(delegate
             {
@@ -296,14 +296,14 @@ namespace ScreenLine
                 if (data == null || WindowsNative.GetClipboardSequenceNumber() != sequence) return null;
                 string source = WindowsNative.ClipboardOwnerName();
                 if (WindowsNative.GetClipboardSequenceNumber() != sequence) return null;
-                return ReadImage(data, source).GetAwaiter().GetResult();
+                return ReadImage(data, source, screenshotTools).GetAwaiter().GetResult();
             });
         }
 
-        internal static async Task<ClipboardPicture> ReadImage(IDataObject data, string source)
+        internal static async Task<ClipboardPicture> ReadImage(IDataObject data, string source, bool screenshotTools = true)
         {
             string imageFile;
-            if (!ClipboardRules.IsImage(data, source, out imageFile)) return null;
+            if (!ClipboardRules.IsImage(data, source, out imageFile, screenshotTools)) return null;
             if (imageFile != null)
             {
                 byte[] original = await Task.Run(delegate

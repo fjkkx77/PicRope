@@ -121,6 +121,16 @@ namespace ScreenLine
             });
             previewToggle.IsCheckable = true;
             previewToggle.IsChecked = store.State.HoverPreview;
+            MenuItem screenshotToolsToggle = null;
+            screenshotToolsToggle = more.AddAction("收集 PixPin 等截图软件的截图", "picture", delegate
+            {
+                bool previous = store.State.CollectScreenshotTools;
+                store.State.CollectScreenshotTools = screenshotToolsToggle.IsChecked;
+                try { store.Save(); }
+                catch (Exception error) { store.State.CollectScreenshotTools = previous; screenshotToolsToggle.IsChecked = previous; store.Log(error); Notice("截图软件收集设置保存失败"); }
+            });
+            screenshotToolsToggle.IsCheckable = true;
+            screenshotToolsToggle.IsChecked = store.State.CollectScreenshotTools;
             captureMenu = more.AddAction("区域截图", "capture", ShowCapture);
             UpdateCaptureLabel();
             more.AddAction("截图快捷键…", "shortcut", delegate

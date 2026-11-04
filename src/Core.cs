@@ -20,6 +20,8 @@ namespace ScreenLine
         public bool AutoHang { get; set; }
         public bool HoverPreview { get; set; }
         public bool RevealOnTopHover { get; set; }
+        // 是否收集 PixPin、QQ 等「位图 + 截图文件」形式的截图；旧配置没有这一项时默认开启
+        public bool CollectScreenshotTools { get; set; }
         public string Theme { get; set; }
         public string DisplayDevice { get; set; }
         public string LastUpdateNotification { get; set; }
@@ -29,7 +31,7 @@ namespace ScreenLine
         public List<string> Collection { get; set; }
         public List<TextItem> Texts { get; set; }
 
-        public SavedState() { Images = new List<string>(); Collection = new List<string>(); Texts = new List<TextItem>(); Theme = "classic"; AutoHang = true; HoverPreview = true; RevealOnTopHover = true; CaptureModifiers = 3; CaptureKey = (uint)'S'; }
+        public SavedState() { Images = new List<string>(); Collection = new List<string>(); Texts = new List<TextItem>(); Theme = "classic"; AutoHang = true; HoverPreview = true; RevealOnTopHover = true; CollectScreenshotTools = true; CaptureModifiers = 3; CaptureKey = (uint)'S'; }
     }
 
     internal sealed class StateStore
@@ -223,7 +225,7 @@ namespace ScreenLine
             return IsImage(data, source, out imageFile);
         }
 
-        public static bool IsImage(IDataObject data, string source, out string imageFile)
+        public static bool IsImage(IDataObject data, string source, out string imageFile, bool screenshotTools = true)
         {
             imageFile = null;
             var formats = new HashSet<string>(data.GetFormats(), StringComparer.OrdinalIgnoreCase);
@@ -235,7 +237,7 @@ namespace ScreenLine
                 bool wechatImage = wechat && formats.Contains("image/png") && formats.Contains("DeviceIndependentBitmap");
                 // PixPin、QQ 等截图软件复制截图时会同时放入原始位图和一份截图文件。
                 // 资源管理器复制图片文件时没有原始位图，所以「有位图 + 来源可确认且不是资源管理器」才按截图收集，并读取位图而非文件。
-                bool screenshotTool = !wechat && HasPixels(formats) && !string.IsNullOrEmpty(source)
+                bool screenshotTool = screenshotTools && !wechat && HasPixels(formats) && !string.IsNullOrEmpty(source)
                     && !string.Equals(source, "explorer", StringComparison.OrdinalIgnoreCase);
                 if ((!wechatImage && !screenshotTool)
                     || formats.Contains("HTML Format") || formats.Contains("Rich Text Format") || formats.Contains("UnicodeText") || formats.Contains("Text") || formats.Contains("System.String")) return false;
