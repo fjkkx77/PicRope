@@ -33,6 +33,9 @@ namespace ScreenLine
         readonly double displayScale;
         Point anchor, moveStart, anchorStart;
         double pictureScale, dropStarted = -1;
+        // 目标逻辑尺寸：先按它一次性改窗口位置和大小，再同步给 WPF 的 Width/Height，避免分三步改导致来回跳
+        double logicalWidth, logicalHeight;
+        readonly ToolTip resetHint = new ToolTip { Content = "双击恢复原始大小", Style = LightTheme.HintStyle };
         int placedLeft = int.MinValue, placedTop = int.MinValue, placedWidth, placedHeight;
         bool moving, rendering, returning;
         public Rect ReturnBounds { get; private set; }
@@ -93,9 +96,13 @@ namespace ScreenLine
             surface.Children.Add(Frame); surface.Children.Add(PinButton);
             Content = surface;
             ApplyTheme(theme, colorIndex);
+            Frame.ToolTip = resetHint;
+            ToolTipService.SetInitialShowDelay(Frame, 700);
+            ToolTipService.SetIsEnabled(Frame, false);
             Frame.MouseLeftButtonDown += delegate(object sender, MouseButtonEventArgs e)
             {
                 e.Handled = true;
+                if (e.ClickCount == 2) { ResetSize(); return; }
                 moving = true;
                 var cursor = WindowsNative.Cursor();
                 moveStart = new Point(cursor.X, cursor.Y);
@@ -132,19 +139,44 @@ namespace ScreenLine
             Closed += delegate { CompositionTarget.Rendering -= Render; };
             bitmap = picture;
             photo.Source = bitmap;
-            pictureScale = Math.Min(1, Math.Min(Math.Min(560, screen.WorkingArea.Width / dpi * 0.75) / bitmap.PixelWidth,
-                Math.Min(420, screen.WorkingArea.Height / dpi * 0.75) / bitmap.PixelHeight));
+            pictureScale = FitScale(bitmap, screen);
             double landingWidth = (bitmap.PixelWidth * pictureScale + 38) * dpi;
             double landingHeight = (bitmap.PixelHeight * pictureScale + 50) * dpi;
             landing = new Point(
                 Math.Max(screen.WorkingArea.Left + landingWidth / 2, Math.Min(screen.WorkingArea.Right - landingWidth / 2, fallStart.X)),
                 Math.Max(screen.WorkingArea.Top + 17 * dpi, Math.Min(screen.WorkingArea.Bottom - landingHeight + 17 * dpi, fallStart.Y + Math.Max(180 * dpi, screen.WorkingArea.Height * 0.25))));
-            Width = bitmap.PixelWidth * pictureScale + 38;
-            Height = bitmap.PixelHeight * pictureScale + 50;
+            Width = logicalWidth = bitmap.PixelWidth * pictureScale + 38;
+            Height = logicalHeight = bitmap.PixelHeight * pictureScale + 50;
             zoom.ScaleX = (startWidth + 14) / (Width - 24);
             zoom.ScaleY = (startHeight + 14) / (Height - 36);
             turn.Angle = initialTilt;
             ReturnBounds = origin;
+        }
+
+        // 刚贴出来时的大小（也是「双击恢复」的目标）：不超过原图，且不超过 560×420、屏幕的 3/4
+        static double FitScale(BitmapSource picture, Forms.Screen screen)
+        {
+            double dpi = WindowsNative.MonitorScale(screen);
+            return Math.Min(1, Math.Min(Math.Min(560, screen.WorkingArea.Width / dpi * 0.75) / picture.PixelWidth,
+                Math.Min(420, screen.WorkingArea.Height / dpi * 0.75) / picture.PixelHeight));
+        }
+
+        Forms.Screen CurrentScreen() { return Forms.Screen.FromPoint(new System.Drawing.Point((int)anchor.X, (int)anchor.Y)); }
+
+        void UpdateResetHint()
+        {
+            bool zoomed = Math.Abs(pictureScale - FitScale(bitmap, CurrentScreen())) > 1e-6;
+            ToolTipService.SetIsEnabled(Frame, zoomed);
+            if (!zoomed) resetHint.IsOpen = false;
+        }
+
+        // 双击：恢复到刚贴出来时的大小，图钉位置不动
+        void ResetSize()
+        {
+            if (returning || !IsHitTestVisible) return;
+            pictureScale = FitScale(bitmap, CurrentScreen());
+            UpdateResetHint();
+            StartRendering();
         }
 
         public void ApplyTheme(LineTheme theme, int colorIndex)
@@ -210,10 +242,10 @@ namespace ScreenLine
             double elapsed = Math.Max(0, now - dropStarted);
             double t = Math.Min(1, elapsed / 0.40);
             double progress = t * t * t * (10 + t * (-15 + 6 * t));
-            Width = bitmap.PixelWidth * pictureScale + 38;
-            Height = bitmap.PixelHeight * pictureScale + 50;
-            zoom.ScaleX = (startWidth + 14) / (Width - 24) * (1 - progress) + progress;
-            zoom.ScaleY = (startHeight + 14) / (Height - 36) * (1 - progress) + progress;
+            logicalWidth = bitmap.PixelWidth * pictureScale + 38;
+            logicalHeight = bitmap.PixelHeight * pictureScale + 50;
+            zoom.ScaleX = (startWidth + 14) / (logicalWidth - 24) * (1 - progress) + progress;
+            zoom.ScaleY = (startHeight + 14) / (logicalHeight - 36) * (1 - progress) + progress;
             turn.Angle = initialTilt * (1 - progress);
             if (!IsHitTestVisible)
             {
@@ -236,17 +268,22 @@ namespace ScreenLine
         {
             var screen = IsHitTestVisible ? Forms.Screen.FromPoint(new System.Drawing.Point((int)anchor.X, (int)anchor.Y)) : display;
             double dpi = IsHitTestVisible ? WindowsNative.MonitorScale(screen) : displayScale;
-            int width = (int)Math.Round(Width * dpi), height = (int)Math.Round(Height * dpi);
+            int width = (int)Math.Round(logicalWidth * dpi), height = (int)Math.Round(logicalHeight * dpi);
             int left = (int)Math.Round(anchor.X - width / 2.0), top = (int)Math.Round(anchor.Y - 17 * dpi);
             if (IsHitTestVisible)
             {
-                left = Math.Max(screen.WorkingArea.Left, Math.Min(screen.WorkingArea.Right - width, left));
-                top = Math.Max(screen.WorkingArea.Top, Math.Min(screen.WorkingArea.Bottom - height, top));
+                int clampedLeft = Math.Max(screen.WorkingArea.Left, Math.Min(screen.WorkingArea.Right - width, left));
+                int clampedTop = Math.Max(screen.WorkingArea.Top, Math.Min(screen.WorkingArea.Bottom - height, top));
+                // 被屏幕边缘推回来时记住新位置；否则缩小时会跳回屏幕外那个旧位置
+                if ((clampedLeft != left || clampedTop != top) && !moving) anchor = new Point(clampedLeft + width / 2.0, clampedTop + 17 * dpi);
+                left = clampedLeft; top = clampedTop;
             }
             if (left == placedLeft && top == placedTop && width == placedWidth && height == placedHeight) return;
             bool resize = width != placedWidth || height != placedHeight;
             placedLeft = left; placedTop = top; placedWidth = width; placedHeight = height;
+            // 位置和大小一次改完；再把同样的尺寸告诉 WPF，它就不会再单独改宽、改高（原版每滚一格窗口要变 3 次）
             WindowsNative.SetWindowPos(handle, IntPtr.Zero, left, top, width, height, resize ? 0x14u : 0x15u);
+            if (resize) { Width = width / dpi; Height = height / dpi; }
         }
 
         void ResizePicture(object sender, MouseWheelEventArgs e)
@@ -256,7 +293,22 @@ namespace ScreenLine
             double dpi = WindowsNative.MonitorScale(screen);
             double maximum = Math.Min((screen.WorkingArea.Width / dpi - 40) / bitmap.PixelWidth,
                 (screen.WorkingArea.Height / dpi - 52) / bitmap.PixelHeight);
+            double previous = pictureScale;
             pictureScale = Math.Max(Math.Min(0.08, maximum), Math.Min(maximum, pictureScale * Math.Pow(1.12, e.Delta / 120.0)));
+            if (pictureScale == previous) return;
+            var cursor = WindowsNative.Cursor();
+            bool overPicture = cursor.X >= placedLeft && cursor.X < placedLeft + placedWidth && cursor.Y >= placedTop && cursor.Y < placedTop + placedHeight;
+            if (IsHitTestVisible && placedWidth > 0 && overPicture)
+            {
+                // 以光标为中心缩放：光标指着的那一点缩放后仍在光标下；光标不在贴图上时保持原版的「以图钉为中心」
+                // 用不取整的锚点推算当前左上角，多次缩放不会累积取整误差
+                var exactTopLeft = new Point(anchor.X - placedWidth / 2.0, anchor.Y - 17 * dpi);
+                var topLeft = ZoomRules.AroundCursor(new Point(cursor.X, cursor.Y), exactTopLeft,
+                    bitmap.PixelWidth * previous, bitmap.PixelHeight * previous, bitmap.PixelWidth * pictureScale, bitmap.PixelHeight * pictureScale, dpi);
+                double newWidth = Math.Round((bitmap.PixelWidth * pictureScale + 38) * dpi);
+                anchor = new Point(topLeft.X + newWidth / 2.0, topLeft.Y + 17 * dpi);
+            }
+            UpdateResetHint();
             StartRendering();
         }
 

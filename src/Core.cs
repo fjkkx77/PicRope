@@ -201,6 +201,20 @@ namespace ScreenLine
         }
     }
 
+    internal static class ZoomRules
+    {
+        // 贴图窗口里图片区域的边距（逻辑像素）：左右各 12+1+6=19，上 24+1+6=31（与 PinnedImageWindow 的 Margin/Border/Padding 一致）
+        public const double SideInset = 19, TopInset = 31;
+
+        // 以光标为中心缩放：光标在图片上的相对位置缩放前后保持不变，返回新窗口左上角（物理像素）
+        public static Point AroundCursor(Point cursor, Point oldTopLeft, double oldWidth, double oldHeight, double newWidth, double newHeight, double dpi)
+        {
+            double fx = Math.Max(0, Math.Min(1, (cursor.X - oldTopLeft.X - SideInset * dpi) / Math.Max(1, oldWidth * dpi)));
+            double fy = Math.Max(0, Math.Min(1, (cursor.Y - oldTopLeft.Y - TopInset * dpi) / Math.Max(1, oldHeight * dpi)));
+            return new Point(cursor.X - SideInset * dpi - fx * newWidth * dpi, cursor.Y - TopInset * dpi - fy * newHeight * dpi);
+        }
+    }
+
     internal static class FileRules
     {
         static readonly string[] extensions = { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff" };

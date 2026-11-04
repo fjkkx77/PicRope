@@ -82,6 +82,24 @@ namespace ScreenLine.Tests
                 Check(DropRules.ImageFiles(new[] { "C:\\a.zip", "C:\\b.docx" }).Length == 0);
                 Check(DropRules.ImageFiles(null).Length == 0 && DropRules.ImageFiles("不是文件列表").Length == 0);
             });
+            Run("贴图以光标为中心缩放：光标下的那一点缩放前后不动", delegate
+            {
+                // 150% 缩放，窗口左上角 (1000,500)，图片 400×300 → 放大到 448×336；光标指在图片正中
+                double dpi = 1.5;
+                var cursor = new System.Windows.Point(1000 + 19 * dpi + 200 * dpi, 500 + 31 * dpi + 150 * dpi);
+                var topLeft = ZoomRules.AroundCursor(cursor, new System.Windows.Point(1000, 500), 400, 300, 448, 336, dpi);
+                Check(Math.Abs(topLeft.X + 19 * dpi + 224 * dpi - cursor.X) < 1e-6 && Math.Abs(topLeft.Y + 31 * dpi + 168 * dpi - cursor.Y) < 1e-6);
+                // 光标在图片左上角：左上角不动
+                var corner = new System.Windows.Point(1000 + 19 * dpi, 500 + 31 * dpi);
+                var still = ZoomRules.AroundCursor(corner, new System.Windows.Point(1000, 500), 400, 300, 448, 336, dpi);
+                Check(Math.Abs(still.X - 1000) < 1e-6 && Math.Abs(still.Y - 500) < 1e-6);
+                // 先放大再缩小回原尺寸：回到原位置（不累积漂移）
+                var back = ZoomRules.AroundCursor(cursor, topLeft, 448, 336, 400, 300, dpi);
+                Check(Math.Abs(back.X - 1000) < 1e-6 && Math.Abs(back.Y - 500) < 1e-6);
+                // 光标在图片外（边框上）：按最近的图片边缘算，不会把图片甩远
+                var outside = ZoomRules.AroundCursor(new System.Windows.Point(990, 490), new System.Windows.Point(1000, 500), 400, 300, 800, 600, dpi);
+                Check(Math.Abs(outside.X - (990 - 19 * dpi)) < 1e-6 && Math.Abs(outside.Y - (490 - 31 * dpi)) < 1e-6);
+            });
             Run("同尺寸不同图片有不同指纹", delegate { Check(ImageContent.HashPixels(Picture(20)) != ImageContent.HashPixels(Picture(80))); });
             Run("同图片重新编码后指纹不变", delegate
             {
