@@ -59,6 +59,13 @@ namespace ScreenLine.Tests
                     Check(!ClipboardRules.IsPlainImage(new[] { "Bitmap", type }));
             });
             Run("文字剪贴板不收集", delegate { Check(!ClipboardRules.IsPlainImage(new[] { "UnicodeText" })); });
+            Run("拖到绳子上的文件只接图片，去重且保持顺序", delegate
+            {
+                var accepted = DropRules.ImageFiles(new[] { "C:\\a.PNG", "C:\\说明.txt", "C:\\文件夹", "C:\\b.jpg", "c:\\A.png", "", "C:\\c.gif" });
+                Check(accepted.SequenceEqual(new[] { "C:\\a.PNG", "C:\\b.jpg", "C:\\c.gif" }));
+                Check(DropRules.ImageFiles(new[] { "C:\\a.zip", "C:\\b.docx" }).Length == 0);
+                Check(DropRules.ImageFiles(null).Length == 0 && DropRules.ImageFiles("不是文件列表").Length == 0);
+            });
             Run("同尺寸不同图片有不同指纹", delegate { Check(ImageContent.HashPixels(Picture(20)) != ImageContent.HashPixels(Picture(80))); });
             Run("同图片重新编码后指纹不变", delegate
             {

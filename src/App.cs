@@ -65,6 +65,12 @@ namespace ScreenLine
             Captures = new CapturePipeline(Gallery, Application.Current.Dispatcher, screenshots);
             Shelf = new ShelfWindow(Gallery, Act, EnableClipboard);
             Shelf.BasketRequested += ShowBasket;
+            // 拖到绳子上的图片与「添加图片…」走同一条导入流程：复制进收集文件夹再挂上，原文件不动
+            Shelf.FilesDropped += async delegate(string[] files)
+            {
+                foreach (string file in files)
+                    if (!await Captures.Import(file, null, true)) Notice("无法读取图片：" + Path.GetFileName(file));
+            };
             Shelf.TextRequested += ShowTexts;
             Texts.Changed += Shelf.UpdateTexts;
             events = new WindowsEvents();
