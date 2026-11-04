@@ -454,7 +454,7 @@ namespace ScreenLine
             positioning = true; // 改窗口时 WPF 会同步重绘并插进一帧 Render，挡掉（坑 2）
             try
             {
-                ResizeWithoutFlash(stageLeft, stageTop, stageWidth, stageHeight, dpi, delegate
+                ResizeInStep(stageLeft, stageTop, stageWidth, stageHeight, dpi, delegate
                 {
                     surface.Margin = new Thickness((placedLeft - stageLeft) / dpi, (placedTop - stageTop) / dpi, 0, 0);
                 });
@@ -462,15 +462,17 @@ namespace ScreenLine
             finally { positioning = wasPositioning; }
         }
 
-        // 改分层窗口的位置和大小，同时把内容挪到对应位置。
-        // 普通 SetWindowPos 会让系统先把「旧画面」放到新位置上显示一帧（实测 16 次里闪 3~4 次，图片往左上一跳）；
-        // 带 NOCOPYBITS|NOREDRAW 改、排好内容后再补一次 FRAMECHANGED，实测 32 次 0 闪（2026-11-04）
-        void ResizeWithoutFlash(int left, int top, int width, int height, double dpi, Action layout)
+        // 改分层窗口的位置和大小，同时把内容挪到对应位置。顺序是关键：
+        // WPF 在改窗口尺寸的当下（SetWindowPos 里面）会同步重画一次，所以必须先把内容排到新位置、再改窗口，
+        // 那次同步重画画的就是对的。反过来（先改窗口再挪内容）那次重画用的是旧位置，图会往左上跳一下、下一帧才回来
+        // ——用户 11-04 录屏里「一格一跳」就是它（实测快速连滚时出现）。
+        // 另：只挪窗口不改尺寸时 WPF 不会同步重画，窗口先到、画面后到，每帧都对不上，更晃（实测 27 遍跳 257 次），别那样做。
+        void ResizeInStep(int left, int top, int width, int height, double dpi, Action layout)
         {
-            WindowsNative.SetWindowPos(handle, IntPtr.Zero, left, top, width, height, 0x14 | 0x100 | 0x8);
-            Width = width / dpi; Height = height / dpi;
             layout();
-            WindowsNative.SetWindowPos(handle, IntPtr.Zero, 0, 0, 0, 0, 0x37);
+            surface.UpdateLayout();
+            WindowsNative.SetWindowPos(handle, IntPtr.Zero, left, top, width, height, 0x14);
+            Width = width / dpi; Height = height / dpi;
         }
 
         // 动画中每帧：只挪动、缩放窗口里的内容，窗口本身不动
@@ -495,13 +497,16 @@ namespace ScreenLine
             positioning = true;
             try
             {
-                ResizeWithoutFlash(placedLeft, placedTop, placedWidth, placedHeight, dpi, delegate
+                ResizeInStep(placedLeft, placedTop, placedWidth, placedHeight, dpi, delegate
                 {
+                    // 先排成「贴在左上角、刚好贴图大小」——在旧的大窗口和新的小窗口里都是同一个样子
                     surface.Margin = new Thickness(0);
-                    surface.Width = surface.Height = double.NaN;
-                    surface.HorizontalAlignment = HorizontalAlignment.Stretch; surface.VerticalAlignment = VerticalAlignment.Stretch;
-                    Frame.CacheMode = frameCache;
+                    surface.Width = placedWidth / dpi; surface.Height = placedHeight / dpi;
                 });
+                // 窗口已经是刚好的大小，换回铺满（画面不变）
+                surface.Width = surface.Height = double.NaN;
+                surface.HorizontalAlignment = HorizontalAlignment.Stretch; surface.VerticalAlignment = VerticalAlignment.Stretch;
+                Frame.CacheMode = frameCache;
             }
             finally { positioning = wasPositioning; }
         }
