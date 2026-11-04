@@ -44,6 +44,14 @@ namespace ScreenLine
         readonly ToolTip resetHint = new ToolTip { Content = "双击恢复原始大小", Style = LightTheme.HintStyle };
         int placedLeft = int.MinValue, placedTop = int.MinValue, placedWidth, placedHeight;
         bool moving, rendering, returning;
+        // 缩放「舞台」：缩放时窗口先一次撑到够装下起点和终点（再留些余量），动画中只挪动、缩放窗口里的内容，
+        // 停下来后再把窗口收回刚好的大小。实测每帧改分层窗口尺寸约 28ms（每秒 21~37 帧，偶尔一卡 135ms），
+        // 窗口不动只改内容稳定 60 帧；改窗口尺寸的那一下还可能闪一帧旧画面，所以越少越好。
+        readonly Grid surface = new Grid();
+        readonly CacheMode frameCache;
+        bool staged;
+        int stageLeft, stageTop, stageWidth, stageHeight;
+        readonly DispatcherTimer stageCommit = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
         public Rect ReturnBounds { get; private set; }
         public BitmapSource Picture { get { return bitmap; } }
 
@@ -73,7 +81,7 @@ namespace ScreenLine
             Frame.BorderThickness = new Thickness(1);
             Frame.CornerRadius = new CornerRadius(12);
             Frame.Effect = new DropShadowEffect { BlurRadius = 16, ShadowDepth = 4, Opacity = 0.2 };
-            Frame.CacheMode = new BitmapCache { RenderAtScale = dpi };
+            Frame.CacheMode = frameCache = new BitmapCache { RenderAtScale = dpi };
             Frame.RenderTransformOrigin = new Point(0.5, 0);
             var transform = new TransformGroup();
             transform.Children.Add(zoom); transform.Children.Add(turn); transform.Children.Add(paperLift);
@@ -98,8 +106,8 @@ namespace ScreenLine
             ToolTipService.SetInitialShowDelay(PinButton, 650);
             System.Windows.Automation.AutomationProperties.SetName(PinButton, "挂回晾衣绳");
             PinButton.Click += delegate { ReturnToRope(); };
-            var surface = new Grid();
             surface.Children.Add(Frame); surface.Children.Add(PinButton);
+            stageCommit.Tick += delegate { stageCommit.Stop(); if (!rendering) CommitStage(); };
             Content = surface;
             ApplyTheme(theme, colorIndex);
             Frame.ToolTip = resetHint;
@@ -109,6 +117,8 @@ namespace ScreenLine
             {
                 e.Handled = true;
                 if (e.ClickCount == 2) { ResetSize(); return; }
+                // 拖动要整窗移动，先停掉缩放动画、把窗口收回刚好的大小
+                if (staged) { StopRendering(); targetScale = pictureScale; CommitStage(); }
                 moving = true;
                 var cursor = WindowsNative.Cursor();
                 moveStart = new Point(cursor.X, cursor.Y);
@@ -142,7 +152,7 @@ namespace ScreenLine
             };
             Loaded += delegate { dropStarted = clock.Elapsed.TotalSeconds; StartRendering(); };
             Closing += delegate { ReturnBounds = PhotoRect(); };
-            Closed += delegate { StopRendering(); };
+            Closed += delegate { StopRendering(); stageCommit.Stop(); };
             bitmap = picture;
             photo.Source = bitmap;
             pictureScale = targetScale = FitScale(bitmap, screen);
@@ -183,6 +193,7 @@ namespace ScreenLine
             targetScale = FitScale(bitmap, CurrentScreen());
             zoomAroundCursor = false; // 以图钉为中心平滑缩回
             UpdateResetHint();
+            PrepareStage();
             StartRendering();
         }
 
@@ -241,13 +252,21 @@ namespace ScreenLine
         // - 不用计时器：受系统计时精度限制帧数偏少
         // 实测（真实滚轮输入 15 格/每 20ms）：全部收到，延迟最大约 10~20ms
         // 落下动画不需要响应输入，仍直接跟随渲染回调。
+        // 2026-11-04 补：有了缩放舞台以后每一步只改排版（不改窗口），很便宜，空闲循环会空转（实测一秒上千步），
+        // 所以舞台上的缩放改回跟随渲染回调、每帧一步；不在舞台上（比如拖动中滚轮）仍走空闲循环。
         bool zoomLoop, stepQueued;
+        TimeSpan lastRenderingTime = TimeSpan.MinValue;
 
         void StartRendering()
         {
-            if (rendering) return;
+            if (rendering)
+            {
+                // 正在空闲循环里追、这时上了舞台：换成每帧一步
+                if (zoomLoop && staged) { zoomLoop = false; CompositionTarget.Rendering += Render; }
+                return;
+            }
             rendering = true;
-            if (IsHitTestVisible) zoomLoop = true;
+            if (IsHitTestVisible && !staged) zoomLoop = true;
             else CompositionTarget.Rendering += Render;
             Render(null, EventArgs.Empty);
             QueueZoomStep();
@@ -275,6 +294,9 @@ namespace ScreenLine
         void Render(object sender, EventArgs args)
         {
             if (positioning) return; // 正在改窗口时插进来的帧直接跳过，等这次改完下一帧再走
+            // 渲染回调同一帧可能来不止一次，同一帧只走一步
+            var frameArgs = args as RenderingEventArgs;
+            if (frameArgs != null) { if (frameArgs.RenderingTime == lastRenderingTime) return; lastRenderingTime = frameArgs.RenderingTime; }
             double now = clock.Elapsed.TotalSeconds;
             double elapsed = Math.Max(0, now - dropStarted);
             double t = Math.Min(1, elapsed / 0.40);
@@ -298,6 +320,8 @@ namespace ScreenLine
             if (IsHitTestVisible && pictureScale == targetScale)
             {
                 StopRendering();
+                // 停稳一小会儿再收窗口：连着滚的下一格多半马上就来，不必收了又撑
+                if (staged) { stageCommit.Stop(); stageCommit.Start(); }
             }
         }
 
@@ -348,12 +372,138 @@ namespace ScreenLine
                 if ((clampedLeft != left || clampedTop != top) && !moving) anchor = new Point(clampedLeft + width / 2.0, clampedTop + 17 * dpi);
                 left = clampedLeft; top = clampedTop;
             }
+            if (staged) { PlaceOnStage(left, top, width, height, dpi); return; }
             if (left == placedLeft && top == placedTop && width == placedWidth && height == placedHeight) return;
             bool resize = width != placedWidth || height != placedHeight;
             placedLeft = left; placedTop = top; placedWidth = width; placedHeight = height;
             // 位置和大小一次改完；再把同样的尺寸告诉 WPF，它就不会再单独改宽、改高（原版每滚一格窗口要变 3 次）
             WindowsNative.SetWindowPos(handle, IntPtr.Zero, left, top, width, height, resize ? 0x14u : 0x15u);
             if (resize) { Width = width / dpi; Height = height / dpi; }
+        }
+
+        // 按比例 scale 时贴图窗口应在的位置和大小（物理像素，已夹在工作区内）；不改任何状态，用来提前撑好舞台
+        Int32Rect PlannedRect(double scale, Forms.Screen screen, double dpi)
+        {
+            int width = (int)Math.Round((bitmap.PixelWidth * scale + 38) * dpi), height = (int)Math.Round((bitmap.PixelHeight * scale + 50) * dpi);
+            double left = anchor.X - width / 2.0, top = anchor.Y - 17 * dpi;
+            if (zoomAroundCursor && placedWidth > 0)
+            {
+                var topLeft = ZoomRules.AroundCursor(zoomCursor, new Point(anchor.X - placedWidth / 2.0, anchor.Y - 17 * dpi),
+                    bitmap.PixelWidth * pictureScale, bitmap.PixelHeight * pictureScale, bitmap.PixelWidth * scale, bitmap.PixelHeight * scale, dpi);
+                left = topLeft.X; top = topLeft.Y;
+            }
+            int x = (int)Math.Round(left), y = (int)Math.Round(top);
+            x = Math.Max(screen.WorkingArea.Left, Math.Min(screen.WorkingArea.Right - width, x));
+            y = Math.Max(screen.WorkingArea.Top, Math.Min(screen.WorkingArea.Bottom - height, y));
+            return new Int32Rect(x, y, width, height);
+        }
+
+        // 缩放开始前调用：保证窗口已撑到能装下「现在」和「目标」两个位置（放大时再多留两格的余量），
+        // 这样整段动画都不用再改窗口尺寸
+        void PrepareStage()
+        {
+            if (!IsHitTestVisible || moving || returning || handle == IntPtr.Zero || placedWidth <= 0) return;
+            var screen = CurrentScreen();
+            double dpi = WindowsNative.MonitorScale(screen);
+            stageCommit.Stop();
+            if (!staged)
+            {
+                staged = true;
+                stageLeft = placedLeft; stageTop = placedTop; stageWidth = placedWidth; stageHeight = placedHeight;
+                Frame.CacheMode = null; // 内容每帧改尺寸时位图缓存每帧重建，白费功夫（实测关掉更稳）
+                surface.HorizontalAlignment = HorizontalAlignment.Left; surface.VerticalAlignment = VerticalAlignment.Top;
+                surface.Width = placedWidth / dpi; surface.Height = placedHeight / dpi;
+                surface.Margin = new Thickness(0);
+            }
+            var need = PlannedRect(targetScale, screen, dpi);
+            if (StageContains(need)) return;
+            // 装不下才撑；放大时一次多留 4 格（1.12⁴ ≈ 1.57 倍）的余量，连着往上滚不用每格都撑一次
+            var grown = Union(need, new Int32Rect(stageLeft, stageTop, stageWidth, stageHeight));
+            if (targetScale > pictureScale)
+            {
+                double maximum = Math.Min((screen.WorkingArea.Width / dpi - 40) / bitmap.PixelWidth, (screen.WorkingArea.Height / dpi - 52) / bitmap.PixelHeight);
+                grown = Union(grown, PlannedRect(Math.Min(maximum, targetScale * Math.Pow(1.12, 4)), screen, dpi));
+            }
+            GrowStage(grown, dpi, screen);
+        }
+
+        static Int32Rect Union(Int32Rect a, Int32Rect b)
+        {
+            int left = Math.Min(a.X, b.X), top = Math.Min(a.Y, b.Y);
+            return new Int32Rect(left, top, Math.Max(a.X + a.Width, b.X + b.Width) - left, Math.Max(a.Y + a.Height, b.Y + b.Height) - top);
+        }
+
+        bool StageContains(Int32Rect r)
+        {
+            return r.X >= stageLeft && r.Y >= stageTop && r.X + r.Width <= stageLeft + stageWidth && r.Y + r.Height <= stageTop + stageHeight;
+        }
+
+        void GrowStage(Int32Rect r, double dpi, Forms.Screen screen)
+        {
+            // 四周多留 8 像素：预估位置和逐帧实际位置会有一两像素的取整差，别为这点差再撑一次
+            // 舞台不超出工作区（贴图本身也被夹在工作区内，超出部分没用）
+            int left = Math.Max(screen.WorkingArea.Left, r.X - 8), top = Math.Max(screen.WorkingArea.Top, r.Y - 8);
+            int right = Math.Min(screen.WorkingArea.Right, r.X + r.Width + 8), bottom = Math.Min(screen.WorkingArea.Bottom, r.Y + r.Height + 8);
+            if (left > r.X || top > r.Y || right < r.X + r.Width || bottom < r.Y + r.Height)
+            {
+                // 要装的东西本身就超出了这块屏幕的工作区（例如跨屏），不夹
+                left = Math.Min(left, r.X); top = Math.Min(top, r.Y); right = Math.Max(right, r.X + r.Width); bottom = Math.Max(bottom, r.Y + r.Height);
+            }
+            stageLeft = left; stageTop = top; stageWidth = right - left; stageHeight = bottom - top;
+            bool wasPositioning = positioning;
+            positioning = true; // 改窗口时 WPF 会同步重绘并插进一帧 Render，挡掉（坑 2）
+            try
+            {
+                ResizeWithoutFlash(stageLeft, stageTop, stageWidth, stageHeight, dpi, delegate
+                {
+                    surface.Margin = new Thickness((placedLeft - stageLeft) / dpi, (placedTop - stageTop) / dpi, 0, 0);
+                });
+            }
+            finally { positioning = wasPositioning; }
+        }
+
+        // 改分层窗口的位置和大小，同时把内容挪到对应位置。
+        // 普通 SetWindowPos 会让系统先把「旧画面」放到新位置上显示一帧（实测 16 次里闪 3~4 次，图片往左上一跳）；
+        // 带 NOCOPYBITS|NOREDRAW 改、排好内容后再补一次 FRAMECHANGED，实测 32 次 0 闪（2026-11-04）
+        void ResizeWithoutFlash(int left, int top, int width, int height, double dpi, Action layout)
+        {
+            WindowsNative.SetWindowPos(handle, IntPtr.Zero, left, top, width, height, 0x14 | 0x100 | 0x8);
+            Width = width / dpi; Height = height / dpi;
+            layout();
+            WindowsNative.SetWindowPos(handle, IntPtr.Zero, 0, 0, 0, 0, 0x37);
+        }
+
+        // 动画中每帧：只挪动、缩放窗口里的内容，窗口本身不动
+        void PlaceOnStage(int left, int top, int width, int height, double dpi)
+        {
+            if (!StageContains(new Int32Rect(left, top, width, height)))
+                GrowStage(Union(new Int32Rect(left, top, width, height), new Int32Rect(stageLeft, stageTop, stageWidth, stageHeight)), dpi, CurrentScreen());
+            placedLeft = left; placedTop = top; placedWidth = width; placedHeight = height;
+            surface.Margin = new Thickness((left - stageLeft) / dpi, (top - stageTop) / dpi, 0, 0);
+            surface.Width = width / dpi; surface.Height = height / dpi;
+        }
+
+        // 动画停稳后：窗口收回刚好包住贴图的大小，内容铺满，恢复位图缓存
+        void CommitStage()
+        {
+            if (!staged) return;
+            staged = false;
+            stageCommit.Stop();
+            if (handle == IntPtr.Zero) return;
+            double dpi = WindowsNative.MonitorScale(CurrentScreen());
+            bool wasPositioning = positioning;
+            positioning = true;
+            try
+            {
+                ResizeWithoutFlash(placedLeft, placedTop, placedWidth, placedHeight, dpi, delegate
+                {
+                    surface.Margin = new Thickness(0);
+                    surface.Width = surface.Height = double.NaN;
+                    surface.HorizontalAlignment = HorizontalAlignment.Stretch; surface.VerticalAlignment = VerticalAlignment.Stretch;
+                    Frame.CacheMode = frameCache;
+                });
+            }
+            finally { positioning = wasPositioning; }
         }
 
         void ResizePicture(object sender, MouseWheelEventArgs e)
@@ -373,6 +523,7 @@ namespace ScreenLine
             zoomAroundCursor = IsHitTestVisible && placedWidth > 0 && overPicture;
             zoomCursor = new Point(cursor.X, cursor.Y);
             UpdateResetHint();
+            PrepareStage();
             StartRendering();
         }
 
