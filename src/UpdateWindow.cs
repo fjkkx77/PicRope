@@ -16,7 +16,7 @@ namespace ScreenLine
         readonly ProgressBar progress = new ProgressBar { Height = 5, Minimum = 0, Maximum = 100, Visibility = Visibility.Collapsed, Margin = new Thickness(0, 0, 0, 16) };
         readonly Button install;
         string downloaded;
-        bool busy, handingOff;
+        bool busy, handingOff, customConfirmed;
 
         public UpdateWindow(UpdateRelease release, AppUpdates updates, Func<string, Task<bool>> apply)
         {
@@ -32,7 +32,17 @@ namespace ScreenLine
             var close = LightTheme.Button("", Close, "quiet"); close.Content = LightTheme.CloseIcon();
             close.MinWidth = 0; close.Width = close.Height = 28; close.Padding = new Thickness(0); close.HorizontalAlignment = HorizontalAlignment.Right;
             AutomationProperties.SetName(close, "关闭更新窗口"); heading.Children.Add(close); body.Children.Add(heading);
-            body.Children.Add(new TextBlock { Text = "图绳 " + AppUpdates.CurrentVersion + " → " + release.Version, FontSize = 14, Foreground = LightTheme.Brush("#65717F"), Margin = new Thickness(0, 10, 0, 20) });
+            body.Children.Add(new TextBlock { Text = "图绳 " + AppUpdates.DisplayVersion + " → " + release.Version + "（官方版）", FontSize = 14, Foreground = LightTheme.Brush("#65717F"), Margin = new Thickness(0, 10, 0, 14) });
+            // 定制版提醒：安装官方更新会覆盖本机的定制功能，先提醒，再要求二次确认
+            var customNotice = new StackPanel();
+            customNotice.Children.Add(new TextBlock { Text = "你正在用的是定制版", FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = LightTheme.Brush("#7A4B00") });
+            customNotice.Children.Add(new TextBlock {
+                Text = "安装官方更新会换回官方版，你加的定制功能会消失。\n图片、文字和设置都会保留。\n建议先让 Claude 把定制合并到新版本，再更新。",
+                FontSize = 13, LineHeight = 21, TextWrapping = TextWrapping.Wrap, Foreground = LightTheme.Brush("#7A4B00"), Margin = new Thickness(0, 4, 0, 0) });
+            var customBox = new Border { Child = customNotice, Background = LightTheme.Brush("#FFF6E5"), BorderBrush = LightTheme.Brush("#F0C674"),
+                BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(10), Padding = new Thickness(14, 12, 14, 12), Margin = new Thickness(0, 0, 0, 16) };
+            AutomationProperties.SetAutomationId(customBox, "CustomBuildNotice");
+            body.Children.Add(customBox);
             body.Children.Add(new ScrollViewer { MaxHeight = 220, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
                 Content = new TextBlock { Text = String.IsNullOrWhiteSpace(release.Notes) ? "新版本已准备好。" : release.Notes,
                     FontSize = 13, LineHeight = 22, TextWrapping = TextWrapping.Wrap, Foreground = LightTheme.Brush("#343D49") } });
@@ -47,6 +57,15 @@ namespace ScreenLine
             install.Click += async delegate
             {
                 if (busy) return;
+                if (!customConfirmed)
+                {
+                    customConfirmed = true;
+                    install.Content = "仍然安装官方版"; AutomationProperties.SetName(install, "确认安装官方版");
+                    status.Text = "再点一次才会开始下载；不想丢定制功能就点「稍后」。";
+                    status.Foreground = LightTheme.Brush("#B25E00");
+                    return;
+                }
+                status.Foreground = LightTheme.Brush("#65717F");
                 busy = true; install.IsEnabled = false;
                 try
                 {

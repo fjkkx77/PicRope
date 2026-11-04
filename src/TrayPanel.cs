@@ -81,7 +81,7 @@ namespace ScreenLine
                 heading.Children.Add(new Image { Source = logo, Width = 28, Height = 28, HorizontalAlignment = HorizontalAlignment.Left });
             }
             heading.Children.Add(new TextBlock { Text = "图绳", FontSize = 16, FontWeight = FontWeights.SemiBold, Margin = new Thickness(39, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
-            heading.Children.Add(new TextBlock { Text = "v" + AppUpdates.CurrentVersion, FontSize = 11, Foreground = LightTheme.Brush("#65717F"), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center });
+            heading.Children.Add(new TextBlock { Text = "v" + AppUpdates.DisplayVersion, FontSize = 11, Foreground = LightTheme.Brush("#65717F"), HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center });
             panel.Children.Add(heading);
 
             VisibilityButton = Action("显示 / 收起", "show"); VisibilityButton.Tag = "primary";

@@ -166,7 +166,7 @@ namespace ScreenLine
             startup.IsCheckable = true;
             using (var key = Registry.CurrentUser.OpenSubKey(RunKey)) startup.IsChecked = key != null && key.GetValue("PicRope") != null;
             updateMenu = more.AddAction("检查更新…", "save", async delegate { await CheckForUpdates(true); });
-            updateMenu.InputGestureText = "v" + AppUpdates.CurrentVersion;
+            updateMenu.InputGestureText = "v" + AppUpdates.DisplayVersion;
             updateTimer.Tick += async delegate { updateTimer.Interval = TimeSpan.FromHours(12); await CheckForUpdates(false); };
             tray.BalloonTipClicked += delegate { ShowUpdate(); };
             TrayMenu.OnAction(TrayMenu.ExitButton, Exit);
