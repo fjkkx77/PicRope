@@ -45,8 +45,10 @@ namespace ScreenLine
         int placedLeft = int.MinValue, placedTop = int.MinValue, placedWidth, placedHeight;
         bool moving, rendering, returning;
         // 缩放「舞台」：缩放时窗口先一次撑到够装下起点和终点（再留些余量），动画中只挪动、缩放窗口里的内容，
-        // 停下来后再把窗口收回刚好的大小。实测每帧改分层窗口尺寸约 28ms（每秒 21~37 帧，偶尔一卡 135ms），
-        // 窗口不动只改内容稳定 60 帧；改窗口尺寸的那一下还可能闪一帧旧画面，所以越少越好。
+        // 停下来后只裁掉右下的余量（左上角不动）。实测每帧改分层窗口尺寸约 28ms（每秒 21~37 帧，偶尔一卡 135ms），
+        // 窗口不动只改内容稳定 60 帧。
+        // 闪跳规律（11-04 实测）：窗口左上角挪动、同时图在窗口里的位置也变 → 系统可能先拿旧画面按新左上角显示一帧。
+        // 撑大时先排内容再改尺寸（WPF 改尺寸当下同步重画）可以避开；收回时避不开，所以收回只裁右下。
         readonly Grid surface = new Grid();
         readonly CacheMode frameCache;
         bool staged;
@@ -116,7 +118,7 @@ namespace ScreenLine
             System.Windows.Automation.AutomationProperties.SetName(PinButton, "挂回晾衣绳");
             PinButton.Click += delegate { ReturnToRope(); };
             surface.Children.Add(Frame); surface.Children.Add(PinButton);
-            stageCommit.Tick += delegate { stageCommit.Stop(); if (!rendering) CommitStage(); };
+            stageCommit.Tick += delegate { stageCommit.Stop(); if (!rendering) SettleStage(); };
             Content = surface;
             ApplyTheme(theme, colorIndex);
             Frame.ToolTip = resetHint;
@@ -126,8 +128,8 @@ namespace ScreenLine
             {
                 e.Handled = true;
                 if (e.ClickCount == 2) { ResetSize(); return; }
-                // 拖动要整窗移动，先停掉缩放动画、把窗口收回刚好的大小
-                if (staged) { StopRendering(); targetScale = pictureScale; CommitStage(); }
+                // 拖动前先停掉缩放动画（停在当前大小），裁掉余量
+                if (staged) { StopRendering(); targetScale = pictureScale; SettleStage(); }
                 moving = true;
                 var cursor = WindowsNative.Cursor();
                 moveStart = new Point(cursor.X, cursor.Y);
@@ -382,6 +384,7 @@ namespace ScreenLine
                 if ((clampedLeft != left || clampedTop != top) && !moving) anchor = new Point(clampedLeft + width / 2.0, clampedTop + 17 * dpi);
                 left = clampedLeft; top = clampedTop;
             }
+            if (staged && moving && width == placedWidth && height == placedHeight) { MoveStage(left, top); return; }
             if (staged) { PlaceOnStage(left, top, width, height, dpi); return; }
             if (left == placedLeft && top == placedTop && width == placedWidth && height == placedHeight) return;
             bool resize = width != placedWidth || height != placedHeight;
@@ -416,11 +419,12 @@ namespace ScreenLine
             var screen = CurrentScreen();
             double dpi = WindowsNative.MonitorScale(screen);
             stageCommit.Stop();
+            Frame.CacheMode = null; // 内容每帧改尺寸时位图缓存每帧重建，白费功夫（实测关掉更稳）；停稳后恢复
             if (!staged)
             {
+                // 第一次缩放时进入「舞台」，之后一直保持（窗口可能比贴图大，多出的部分透明）
                 staged = true;
                 stageLeft = placedLeft; stageTop = placedTop; stageWidth = placedWidth; stageHeight = placedHeight;
-                Frame.CacheMode = null; // 内容每帧改尺寸时位图缓存每帧重建，白费功夫（实测关掉更稳）
                 surface.HorizontalAlignment = HorizontalAlignment.Left; surface.VerticalAlignment = VerticalAlignment.Top;
                 surface.Width = placedWidth / dpi; surface.Height = placedHeight / dpi;
                 surface.Margin = new Thickness(0);
@@ -495,35 +499,44 @@ namespace ScreenLine
             surface.Width = width / dpi; surface.Height = height / dpi;
         }
 
-        // 动画停稳后：窗口收回刚好包住贴图的大小，内容铺满，恢复位图缓存
-        void CommitStage()
+        // 动画停稳后：只把窗口右下多出的部分裁掉，左上角不动；恢复位图缓存。
+        // 不把窗口收回「刚好包住贴图」：那要挪窗口左上角、同时把图在窗口里的位置挪回去，
+        // 系统偶尔先拿旧画面按新左上角显示一帧，图往右下闪一下（实测 12 遍闪 2~3 次，加防闪标志也一样）；
+        // 只裁右下 12 遍 0 次。代价是贴图左上方可能留一块透明区，鼠标会穿过去，看不见。
+        void SettleStage()
         {
-            if (!staged) return;
-            staged = false;
             stageCommit.Stop();
-            if (handle == IntPtr.Zero) return;
+            if (!staged || handle == IntPtr.Zero) return;
             double dpi = WindowsNative.MonitorScale(CurrentScreen());
+            int width = placedLeft + placedWidth - stageLeft, height = placedTop + placedHeight - stageTop;
             bool wasPositioning = positioning;
             positioning = true;
             try
             {
-                ResizeInStep(placedLeft, placedTop, placedWidth, placedHeight, dpi, delegate
+                if (width != stageWidth || height != stageHeight)
                 {
-                    // 先排成「贴在左上角、刚好贴图大小」——在旧的大窗口和新的小窗口里都是同一个样子
-                    surface.Margin = new Thickness(0);
-                    surface.Width = placedWidth / dpi; surface.Height = placedHeight / dpi;
-                });
-                // 窗口已经是刚好的大小，换回铺满（画面不变）
-                surface.Width = surface.Height = double.NaN;
-                surface.HorizontalAlignment = HorizontalAlignment.Stretch; surface.VerticalAlignment = VerticalAlignment.Stretch;
+                    stageWidth = width; stageHeight = height;
+                    WindowsNative.SetWindowPos(handle, IntPtr.Zero, 0, 0, width, height, 0x16); // NOMOVE：左上角不动
+                    Width = width / dpi; Height = height / dpi;
+                }
                 Frame.CacheMode = frameCache;
             }
             finally { positioning = wasPositioning; }
         }
 
+        // 拖动：窗口和图一起平移（图在窗口里的位置不变），只挪不改尺寸——和原版拖动一样，不会闪
+        void MoveStage(int left, int top)
+        {
+            if (left == placedLeft && top == placedTop) return;
+            stageLeft += left - placedLeft; stageTop += top - placedTop;
+            placedLeft = left; placedTop = top;
+            WindowsNative.SetWindowPos(handle, IntPtr.Zero, stageLeft, stageTop, 0, 0, 0x15);
+        }
+
         void ResizePicture(object sender, MouseWheelEventArgs e)
         {
             e.Handled = true;
+            if (moving) return; // 按住拖动时不缩放：拖动是整窗平移，不改尺寸
             var screen = WindowsNative.ScreenAtPointer();
             double dpi = WindowsNative.MonitorScale(screen);
             double maximum = Math.Min((screen.WorkingArea.Width / dpi - 40) / bitmap.PixelWidth,
