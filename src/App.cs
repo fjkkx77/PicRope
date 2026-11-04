@@ -104,7 +104,7 @@ namespace ScreenLine
             TrayMenu.OnAction(TrayMenu.AppearanceButton, ShowAppearance);
             var more = TrayMenu.MoreMenu;
             MenuItem topHoverToggle = null;
-            topHoverToggle = more.AddAction("鼠标移至顶部时展开", "show", delegate
+            topHoverToggle = more.AddAction("鼠标移至左上角时展开", "show", delegate
             {
                 try { Shelf.SetRevealOnTopHover(topHoverToggle.IsChecked); }
                 catch (Exception error) { topHoverToggle.IsChecked = store.State.RevealOnTopHover; store.Log(error); Notice("顶部展开设置保存失败"); }
