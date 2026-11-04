@@ -741,6 +741,8 @@ namespace ScreenLine
             bool down = (WindowsNative.GetAsyncKeyState(1) & 0x8000) != 0;
             bool nearTop = cursor.X >= screen.Bounds.Left && cursor.X < screen.Bounds.Right
                 && cursor.Y >= screen.Bounds.Top && cursor.Y <= Math.Max(screen.Bounds.Top + 2, screen.WorkingArea.Top - 1);
+            bool nearCorner = nearTop && RevealRules.InTopLeftCorner(cursor.X, cursor.Y, screen.Bounds.Left, screen.Bounds.Top,
+                screen.Bounds.Right, screen.WorkingArea.Top, WindowsNative.MonitorScale(screen));
             var interval = TimeSpan.FromMilliseconds(Revealed || nearTop ? 30 : 100);
             if (pointer.Interval != interval) pointer.Interval = interval;
             bool over = Revealed && OverControl(cursor);
@@ -797,7 +799,7 @@ namespace ScreenLine
                     && cursor.Y >= Display.WorkingArea.Top && cursor.Y < Display.WorkingArea.Top + 220 * WindowsNative.MonitorScale(Display))
                     Reveal(true, false, 0);
             }
-            if (gallery.Store.State.RevealOnTopHover && nearTop && !down && !suppressEdge && !WindowsNative.FullScreen(screen, Handle))
+            if (gallery.Store.State.RevealOnTopHover && nearCorner && !down && !suppressEdge && !WindowsNative.FullScreen(screen, Handle))
             {
                 if (edgeSince == DateTime.MaxValue) edgeSince = now;
                 if (now - edgeSince >= TimeSpan.FromMilliseconds(320) && (!Revealed || screen.DeviceName != Display.DeviceName))

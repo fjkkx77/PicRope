@@ -93,14 +93,14 @@ namespace ScreenLine.Tests
             string watched = Path.Combine(root, "WindowsScreenshots"); Directory.CreateDirectory(watched);
             var store = new StateStore(Path.Combine(root, "profile"));
             controller = new DesktopController(store, watched, false);
-            var topHover = controller.TrayMenu.MoreMenu.Items.OfType<MenuItem>().Single(item => item.Header as string == "鼠标移至顶部时展开");
+            var topHover = controller.TrayMenu.MoreMenu.Items.OfType<MenuItem>().Single(item => item.Header as string == "鼠标移至左上角时展开");
             Check(topHover.IsCheckable && topHover.IsChecked, "顶部悬停菜单默认开启");
             topHover.IsChecked = false; topHover.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             Check(!store.State.RevealOnTopHover && !new StateStore(store.Root).State.RevealOnTopHover, "菜单关闭顶部悬停并保存");
             controller.Dispose();
             store = new StateStore(store.Root); controller = new DesktopController(store, watched, false);
             var more = controller.TrayMenu.MoreMenu;
-            topHover = more.Items.OfType<MenuItem>().Single(item => item.Header as string == "鼠标移至顶部时展开");
+            topHover = more.Items.OfType<MenuItem>().Single(item => item.Header as string == "鼠标移至左上角时展开");
             Check(!topHover.IsChecked && !store.State.RevealOnTopHover, "重启后菜单与配置保留关闭状态");
             topHover.IsChecked = true; topHover.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
             Check(store.State.RevealOnTopHover && new StateStore(store.Root).State.RevealOnTopHover, "菜单重新开启顶部悬停并保存");
@@ -376,7 +376,7 @@ namespace ScreenLine.Tests
             Check(controller.Gallery.Items.Count == 1 && controller.Gallery.Items[0].Path == retained, "重新启动可恢复挂着的图片");
             Check(controller.Captures.CollectClipboard, "重新启动可恢复剪贴板收集设置");
             Check(!controller.Gallery.Store.State.RevealOnTopHover
-                && !controller.TrayMenu.MoreMenu.Items.OfType<MenuItem>().Single(item => item.Header as string == "鼠标移至顶部时展开").IsChecked,
+                && !controller.TrayMenu.MoreMenu.Items.OfType<MenuItem>().Single(item => item.Header as string == "鼠标移至左上角时展开").IsChecked,
                 "重新启动后保留顶部悬停关闭状态，菜单同步取消勾选");
             await Task.Delay(900);
             var restoredCard = controller.Shelf.CardFor(retained);
@@ -2126,7 +2126,7 @@ namespace ScreenLine.Tests
             Check(trayMenu.IsOpen, "展开更多操作时主面板保持可见");
             var moreBounds = new Rect(more.PointToScreen(new Point()), more.PointToScreen(new Point(more.ActualWidth, more.ActualHeight)));
             Check(screen.Bounds.Contains((int)moreBounds.Left, (int)moreBounds.Top) && moreBounds.Right <= screen.Bounds.Right + 1 && moreBounds.Bottom <= screen.Bounds.Bottom + 1, "更多操作靠近屏幕边缘也完整显示");
-            var topHover = more.Items.OfType<MenuItem>().Single(item => item.Header as string == "鼠标移至顶部时展开");
+            var topHover = more.Items.OfType<MenuItem>().Single(item => item.Header as string == "鼠标移至左上角时展开");
             Check(topHover.IsCheckable && topHover.IsChecked, "顶部悬停展开菜单默认勾选");
             await ClickMenu(topHover);
             Check(!topHover.IsChecked && !store.State.RevealOnTopHover && !new StateStore(store.Root).State.RevealOnTopHover,
