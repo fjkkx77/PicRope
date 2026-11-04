@@ -173,6 +173,34 @@ namespace ScreenLine
         }
     }
 
+    internal static class ReorderRules
+    {
+        public const double Slot = 172;          // 卡片间距，与 ShelfWindow.LayoutCards 一致
+        public const double PullOut = 56;        // 拖动中竖向偏离超过它 → 改成「拖出去用」
+        public const double EdgeZone = 64;       // 边缘自动滚区宽度（沿用拖动排序配方：距边 64 起滚）
+        // 拖起的那一下：竖向为主 → 拖出去用（保留原版手势）；横向为主 → 沿绳子排序
+        public static bool StartsReorder(double dx, double dy, int hanging) { return hanging >= 2 && Math.Abs(dx) >= Math.Abs(dy); }
+        public static bool PulledOut(double dy) { return Math.Abs(dy) > PullOut; }
+
+        // 被拖卡片左边缘 left 落在第几格：越过相邻格中线就换位（四舍五入到最近格）
+        public static int TargetIndex(double left, int count, double contentWidth)
+        {
+            if (count <= 0) return 0;
+            double start = (contentWidth - count * Slot) / 2;
+            int index = (int)Math.Round((left - start) / Slot, MidpointRounding.AwayFromZero);
+            return Math.Max(0, Math.Min(count - 1, index));
+        }
+
+        // 光标在可视区内的 x → 每秒滚动多少（负数往左）。配方：深入边缘 d 像素，每 16.7ms 滚 d/4，按时间换算 = 15d px/s
+        public static double EdgeSpeed(double x, double width)
+        {
+            if (width <= EdgeZone * 2) return 0;
+            if (x < EdgeZone) return -15 * (EdgeZone - Math.Max(0, x));
+            if (x > width - EdgeZone) return 15 * (Math.Min(width, x) - (width - EdgeZone));
+            return 0;
+        }
+    }
+
     internal static class FileRules
     {
         static readonly string[] extensions = { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff" };
@@ -569,6 +597,19 @@ namespace ScreenLine
             var removed = new HashSet<CaptureItem>(items);
             var previous = Items.ToArray();
             if (Items.RemoveAll(item => removed.Contains(item)) == 0) return;
+            try { Save(); }
+            catch { Items.Clear(); Items.AddRange(previous); Store.State.Images = Items.Select(i => i.Path).ToList(); throw; }
+            Notify();
+        }
+
+        // 把 item 挪到 anchor 前面（after=true 则后面），只改绳上顺序；保存失败恢复原顺序
+        public void Move(CaptureItem item, CaptureItem anchor, bool after)
+        {
+            if (item == null || anchor == null || item == anchor || !Items.Contains(item) || !Items.Contains(anchor)) return;
+            var previous = Items.ToArray();
+            Items.Remove(item);
+            Items.Insert(Items.IndexOf(anchor) + (after ? 1 : 0), item);
+            if (Items.SequenceEqual(previous)) return;
             try { Save(); }
             catch { Items.Clear(); Items.AddRange(previous); Store.State.Images = Items.Select(i => i.Path).ToList(); throw; }
             Notify();

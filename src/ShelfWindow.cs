@@ -80,6 +80,9 @@ namespace ScreenLine
         static readonly Brush DropCatcher = new SolidColorBrush(Color.FromArgb(2, 255, 255, 255));
         readonly Border dropHint = new Border();
         public event Action<string[]> FilesDropped;
+        // 拖动排序：正在拖的卡片和它当前占的格（按绳上顺序）
+        ShotCard reorderCard;
+        int reorderSlot;
         int displaySwitchVersion;
         string viewingName;
         IntPtr viewingWindow;
@@ -392,6 +395,8 @@ namespace ScreenLine
                     card.ApplyTheme(Appearance, gallery.Items.IndexOf(item));
                     var mounted = card;
                     card.Grip.Click += async delegate { await ReleasePhoto(mounted); };
+                    card.ReorderStarted += StartReorder;
+                    card.ReorderEnded += EndReorder;
                     cards.Add(item.Path, card);
                     content.Children.Add(card);
                 }
@@ -425,13 +430,64 @@ namespace ScreenLine
             DrawRope();
             Canvas.SetLeft(hint, (content.Width - hint.Width) / 2);
             Canvas.SetTop(hint, 56);
+            if (reorderCard != null && hanging.Contains(reorderCard.Item))
+            {
+                // 排序中按「拖到的那一格」排：其他卡片让位，被拖的那张跟着光标，不归位
+                var order = hanging.Where(item => item != reorderCard.Item).ToList();
+                order.Insert(Math.Max(0, Math.Min(order.Count, reorderSlot)), reorderCard.Item);
+                hanging = order.ToArray();
+            }
             for (int i = 0; i < hanging.Length; i++)
             {
                 ShotCard card = cards[hanging[i].Path];
                 double x = (content.Width - hanging.Length * 172) / 2 + i * 172;
-                card.Place(x, !Revealed);
+                if (card != reorderCard) card.Place(x, !Revealed);
                 card.Frame(0, ropeMotion.Position, LineWidth, viewport.HorizontalOffset);
             }
+        }
+
+        void StartReorder(ShotCard card)
+        {
+            reorderCard = card;
+            reorderSlot = Array.IndexOf(HangingItems(), card.Item);
+            Panel.SetZIndex(card, 10);
+            Preview.Dismiss();
+            card.Nudge(1.5);
+            StartRendering();
+        }
+
+        // 每帧：被拖卡片贴着光标；越过相邻格中线就换格；光标进边缘 64px 自动滚
+        void FollowReorder(double elapsed)
+        {
+            if (reorderCard == null) return;
+            Point inView = Mouse.GetPosition(viewport);
+            double speed = ReorderRules.EdgeSpeed(inView.X, viewport.ActualWidth);
+            if (speed != 0 && elapsed > 0)
+                scrollMotion.Target = Math.Max(0, Math.Min(ScrollLimit, scrollMotion.Target + speed * elapsed));
+            double x = Math.Max(0, Math.Min(content.Width - reorderCard.Width, Mouse.GetPosition(content).X - reorderCard.GrabX));
+            reorderCard.Follow(x);
+            int slot = ReorderRules.TargetIndex(x, HangingItems().Length, content.Width);
+            if (slot != reorderSlot) { reorderSlot = slot; LayoutCards(); }
+        }
+
+        void EndReorder(ShotCard card, bool commit)
+        {
+            if (card != reorderCard) return;
+            reorderCard = null;
+            Panel.SetZIndex(card, 0);
+            var others = HangingItems().Where(item => item != card.Item).ToArray();
+            if (commit && others.Length > 0)
+            {
+                try
+                {
+                    if (reorderSlot < others.Length) gallery.Move(card.Item, others[reorderSlot], false);
+                    else gallery.Move(card.Item, others[others.Length - 1], true);
+                }
+                catch (Exception error) { gallery.Store.Log(error); }
+            }
+            LayoutCards(); // 落位：从松手的位置弹进格子（Place 只改目标，弹簧带过去）
+            card.Nudge(-1.5);
+            StartRendering();
         }
 
         internal CaptureItem[] HangingItems()
@@ -714,7 +770,7 @@ namespace ScreenLine
             {
                 return !revealMotion.Settled || !ropeMotion.Settled || !scrollMotion.Settled || !basketMotion.Settled
                     || !basketCounterMotion.Settled || (gallery.Store.State.CollectTextClipboard && envelopeImage.Animating)
-                    || cards.Values.Any(card => card.Animating);
+                    || cards.Values.Any(card => card.Animating) || reorderCard != null;
             }
         }
 
@@ -744,6 +800,7 @@ namespace ScreenLine
             basketMotion.Step(elapsed); basketTurn.Angle = basketMotion.Position;
             basketCounterMotion.Step(elapsed); basketCounterScale.ScaleX = basketCounterScale.ScaleY = basketCounterMotion.Position;
             if (gallery.Store.State.CollectTextClipboard) envelopeImage.Frame(elapsed);
+            FollowReorder(elapsed);
             scrollMotion.Target = Math.Max(0, Math.Min(scrollMotion.Target, ScrollLimit));
             scrollMotion.Step(elapsed);
             if (scrollMotion.Position < 0 || scrollMotion.Position > ScrollLimit)
@@ -922,19 +979,27 @@ namespace ScreenLine
         readonly ImageMenu menu;
         internal ImageMenu ActionMenu { get { return menu; } }
         Point start;
-        bool pressed, held, dragging, placed, hovering, gripHover;
-        double entryTime, breezeDelay = -1, breezeAngle;
+        bool pressed, held, dragging, placed, hovering, gripHover, reordering;
+        double entryTime, breezeDelay = -1, breezeAngle, downParentY;
         ImageContent displayed;
-        public bool Busy { get { return pressed || dragging || Releasing || menu.IsOpen; } }
+        readonly Func<CaptureItem[]> hangingOf;
+        // 沿绳子横向拖 = 排序：开始/结束时通知 ShelfWindow（结束参数 true = 按当前位置落定）
+        public event Action<ShotCard> ReorderStarted;
+        public event Action<ShotCard, bool> ReorderEnded;
+        internal double GrabX { get; private set; }
+        internal bool Reordering { get { return reordering; } }
+        public bool Busy { get { return pressed || dragging || reordering || Releasing || menu.IsOpen; } }
         internal bool Animating
         {
             get
             {
                 return !xMotion.Settled || !drop.Settled || !swing.Settled || !scaleMotion.Settled || !clipMotion.Settled
-                    || breezeDelay >= 0 || entryTime < 0.16 || scaleMotion.Target != (pressed ? 0.95 : (hovering && !Releasing ? 1.035 : 1))
+                    || breezeDelay >= 0 || entryTime < 0.16 || scaleMotion.Target != ScaleTarget
                     || clipMotion.Target != (gripHover || Releasing ? 1 : 0);
             }
         }
+        // 拖着排序时微微放大，像被拎起来；其余与原版一致
+        double ScaleTarget { get { return reordering ? 1.06 : (pressed ? 0.95 : (hovering && !Releasing ? 1.035 : 1)); } }
         public bool Flying { get; private set; }
         public bool Detached { get; set; }
         public bool Releasing { get; private set; }
@@ -949,6 +1014,7 @@ namespace ScreenLine
             Item = item;
             Appearance = LineTheme.All[0];
             this.act = act;
+            hangingOf = hangingItems;
             Width = 164;
             Height = 178;
             RenderTransform = tilt;
@@ -1020,7 +1086,7 @@ namespace ScreenLine
             Surface.MouseLeftButtonDown += Down;
             Surface.MouseLeftButtonUp += Up;
             Surface.MouseMove += Move;
-            Surface.LostMouseCapture += delegate { hold.Stop(); pressed = false; };
+            Surface.LostMouseCapture += delegate { hold.Stop(); pressed = false; if (reordering) FinishReorder(true); };
             hold.Tick += delegate { hold.Stop(); held = true; pressed = false; Surface.ReleaseMouseCapture(); act(ShotAction.Edit, item); };
             menu = new ImageMenu(delegate(ShotAction action) { act(action, Item); }, FileRules.IsInside(item.Path, gallery.Store.Inbox));
             Surface.MouseRightButtonUp += delegate(object sender, MouseButtonEventArgs e)
@@ -1078,7 +1144,7 @@ namespace ScreenLine
                 breezeDelay -= elapsed;
                 if (breezeDelay < 0 && !Flying && !Busy) Nudge(breezeAngle);
             }
-            scaleMotion.Target = pressed ? 0.95 : (hovering && !Releasing ? 1.035 : 1);
+            scaleMotion.Target = ScaleTarget;
             scaleMotion.Step(elapsed);
             clipMotion.Target = gripHover || Releasing ? 1 : 0;
             clipMotion.Step(elapsed);
@@ -1151,6 +1217,9 @@ namespace ScreenLine
             e.Handled = true;
             if (e.ClickCount == 2) { hold.Stop(); held = true; act(ShotAction.Open, Item); return; }
             start = e.GetPosition(this);
+            var parent = (Canvas)Parent;
+            Point onRope = e.GetPosition(parent);
+            downParentY = onRope.Y; GrabX = onRope.X - position.X;
             pressed = true;
             held = false;
             Surface.CaptureMouse();
@@ -1161,6 +1230,7 @@ namespace ScreenLine
         {
             e.Handled = true;
             hold.Stop();
+            if (reordering) { FinishReorder(true); Surface.ReleaseMouseCapture(); return; }
             bool copy = pressed && !held && !dragging;
             pressed = false;
             Surface.ReleaseMouseCapture();
@@ -1169,11 +1239,39 @@ namespace ScreenLine
 
         void Move(object sender, MouseEventArgs e)
         {
-            if (!pressed || held || dragging || e.LeftButton != MouseButtonState.Pressed) return;
+            if (e.LeftButton != MouseButtonState.Pressed) return;
+            if (reordering)
+            {
+                // 排序中往下（或往上）拉离绳子 → 放弃排序，改成原版的「拖出去用」
+                if (ReorderRules.PulledOut(e.GetPosition((Canvas)Parent).Y - downParentY)) { FinishReorder(false); DragOut(); }
+                return;
+            }
+            if (!pressed || held || dragging) return;
             Point position = e.GetPosition(this);
             if (Math.Abs(position.X - start.X) < SystemParameters.MinimumHorizontalDragDistance && Math.Abs(position.Y - start.Y) < SystemParameters.MinimumVerticalDragDistance) return;
             hold.Stop();
             pressed = false;
+            if (ReorderRules.StartsReorder(position.X - start.X, position.Y - start.Y, hangingOf().Length))
+            {
+                reordering = true; // 保持鼠标捕获：拖出图绳范围也能收到移动和松手
+                if (ReorderStarted != null) ReorderStarted(this);
+                return;
+            }
+            DragOut();
+        }
+
+        void FinishReorder(bool commit)
+        {
+            if (!reordering) return;
+            reordering = false;
+            if (ReorderEnded != null) ReorderEnded(this, commit);
+        }
+
+        // 跟着光标走（排序中由 ShelfWindow 每帧调用）
+        internal void Follow(double x) { xMotion.Snap(x); }
+
+        void DragOut()
+        {
             dragging = true;
             Surface.Opacity = 0.45;
             Surface.ReleaseMouseCapture();
