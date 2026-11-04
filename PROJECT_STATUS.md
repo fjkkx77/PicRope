@@ -63,12 +63,12 @@
 6. 剪贴板测试的 `--current-clipboard` 模式只适用于微信。
 7. `PicRope.exe.config` 不要写死代理端口（Codex 装的时候写死过 8800，已删）；.NET Framework 不写代理配置就跟随系统代理。
 8. 推送偶尔「Empty reply / schannel handshake」，网络抖动，重试即可，推完用 `git ls-remote` 核对。
+9. 好几个分支都在 `Core.cs` 同一位置加新类、在 `CoreTests.cs` 同一位置加测试，合并进 `custom` 时会冲突；两边都保留即可。`ShelfWindow` 的展开条件合并后是 `nearCorner && (!down || draggingIn)`。
 10. **🔴 分层透明窗口（AllowsTransparency）改尺寸很贵**：实测每次约 28ms，逐帧改 → 每秒只有 21~37 帧；窗口不动只改里面内容可稳 60 帧（屏幕 60Hz，WPF 也封顶 60）。动画要么在固定大小的窗口里做，要么像贴图缩放那样先撑「舞台」。
 11. **普通 SetWindowPos 改分层窗口的位置+大小，系统会把旧画面放到新位置先显示一帧**（实测 16 次闪 3~4 次）。用 `SWP_NOCOPYBITS|SWP_NOREDRAW` 改、排好内容后再补一次 `FRAMECHANGED`（0x37），实测 32 次 0 闪——见 `PinnedImageWindow.ResizeWithoutFlash`。
 12. **新建并显示一个整屏透明窗口要 50~100ms**（跟面积关系不大）；藏起来的窗口再显示只要约 2.5ms。所以飞行窗口做成池子。藏之前要等清空的画面真正画上去，否则再显示时先露出上次的最后一帧。
 13. 测量时**别同时开截屏采样线程**（BitBlt+CAPTUREBLT 循环）量帧率，它会把分层窗口拖到 30 帧，得出错误结论（踩过）；截屏采样只用来查「闪没闪」。
 14. 剩余已知问题：飞行动画本身（整屏透明窗口每帧回读）仍会偶尔掉帧（只有飞行窗口时 1 秒掉 3~7 帧，和绳子一起动时约 10~15 帧），**原版就有**，不是「上绳那一下卡」。缩小窗口面积能改善但收益有限，暂未做；DWM 透明窗口方案在 ToDesk 等远程/虚拟显示下有黑底风险，没采用。
-9. 好几个分支都在 `Core.cs` 同一位置加新类、在 `CoreTests.cs` 同一位置加测试，合并进 `custom` 时会冲突；两边都保留即可。`ShelfWindow` 的展开条件合并后是 `nearCorner && (!down || draggingIn)`。
 
 ## 六、怎么验证界面行为（没有现成测试的部分）
 
