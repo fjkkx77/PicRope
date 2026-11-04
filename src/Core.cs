@@ -148,9 +148,9 @@ namespace ScreenLine
 
     internal static class RevealRules
     {
-        // 左上角触发区宽度（逻辑像素）。沿用标题按钮避让区的 40 高度量级：鼠标甩到角落时稳稳落在区内，
+        // 左上角触发区宽度（逻辑像素）。初版 40，用户 2026-11-04 实测「太容易误碰」后缩到 28；鼠标甩到角落时仍稳稳落在区内，
         // 顶部其余位置（浏览器标签、窗口标题、右上角关闭按钮）都不会误触发。
-        public const double CornerWidth = 40;
+        public const double CornerWidth = 28;
 
         // 光标是否在这块屏幕的左上角触发区：贴着屏幕上沿（与原「顶部」判定同高），且离左边缘不超过 CornerWidth。
         public static bool InTopLeftCorner(int x, int y, int left, int top, int right, int workTop, double scale)
