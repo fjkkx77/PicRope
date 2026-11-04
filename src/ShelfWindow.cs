@@ -627,7 +627,8 @@ namespace ScreenLine
         public void ShowDiscard(CaptureItem item)
         {
             ShotCard card;
-            if (!Revealed || !cards.TryGetValue(item.Path, out card) || card.Flying) return;
+            // 照片钉在桌面上时（从贴图右键删除）绳上没有这张照片，不播掉落动画（贴图自己有淡出）
+            if (!Revealed || !cards.TryGetValue(item.Path, out card) || card.Flying || card.Detached) return;
             PlayFlight(ShotFlight.Take(Display, card, card.PhotoRect(), true, delegate { }));
         }
 
@@ -686,7 +687,9 @@ namespace ScreenLine
                 await Task.Delay(40);
                 var image = await picture;
                 if (closing || card.IsDisposed) return;
-                var window = new PinnedImageWindow(card.Item, origin, ((RotateTransform)card.RenderTransform).Angle, image, Appearance, card.ColorIndex);
+                var pinnedItem = card.Item;
+                var window = new PinnedImageWindow(pinnedItem, origin, ((RotateTransform)card.RenderTransform).Angle, image, Appearance, card.ColorIndex,
+                    delegate(ShotAction action) { act(action, pinnedItem); }, FileRules.IsInside(pinnedItem.Path, gallery.Store.Inbox));
                 pins.Add(card.Item.Path, window);
                 window.Closed += delegate
                 {

@@ -54,10 +54,19 @@ namespace ScreenLine
         readonly DispatcherTimer stageCommit = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
         public Rect ReturnBounds { get; private set; }
         public BitmapSource Picture { get { return bitmap; } }
+        // 右键菜单：动作和绳子上的卡片走同一套（App.Act），managed＝图片在收集文件夹里（删除＝移到回收站）
+        readonly Action<ShotAction> execute;
+        readonly bool managed;
+        LightMenu menu;
+        bool deleting, closed;
+        readonly ToolTip copiedHint = new ToolTip { Content = "已复制", Style = LightTheme.HintStyle, Placement = System.Windows.Controls.Primitives.PlacementMode.Center };
+        readonly System.Windows.Threading.DispatcherTimer copiedTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1.1) };
 
-        public PinnedImageWindow(CaptureItem item, Rect origin, double tilt, BitmapSource picture, LineTheme theme, int colorIndex)
+        public PinnedImageWindow(CaptureItem item, Rect origin, double tilt, BitmapSource picture, LineTheme theme, int colorIndex, Action<ShotAction> execute = null, bool managed = true)
         {
             Item = item;
+            this.execute = execute;
+            this.managed = managed;
             initialTilt = tilt;
             var screen = Forms.Screen.FromPoint(new System.Drawing.Point((int)(origin.X + origin.Width / 2), (int)origin.Y));
             double dpi = WindowsNative.MonitorScale(screen);
@@ -139,6 +148,7 @@ namespace ScreenLine
             };
             Frame.LostMouseCapture += delegate { if (moving) { moving = false; LiftPin(false); } };
             PreviewMouseWheel += ResizePicture;
+            AttachMenu();
             SourceInitialized += delegate
             {
                 handle = new WindowInteropHelper(this).Handle;
@@ -530,6 +540,72 @@ namespace ScreenLine
         public Rect PhotoRect()
         {
             return new Rect(Frame.PointToScreen(new Point()), Frame.PointToScreen(new Point(Frame.ActualWidth, Frame.ActualHeight)));
+        }
+
+        // ---------- 右键菜单 ----------
+        void AttachMenu()
+        {
+            Closed += delegate { closed = true; copiedTimer.Stop(); copiedHint.IsOpen = false; if (menu != null) menu.IsOpen = false; };
+            copiedTimer.Tick += delegate { copiedTimer.Stop(); copiedHint.IsOpen = false; };
+            copiedHint.PlacementTarget = Frame;
+            Frame.MouseRightButtonUp += delegate(object sender, MouseButtonEventArgs e)
+            {
+                e.Handled = true;
+                if (execute == null || returning || deleting || !IsHitTestVisible) return;
+                if (menu == null) menu = BuildMenu();
+                menu.SetDetails(bitmap.PixelWidth + " × " + bitmap.PixelHeight);
+                menu.PlacementTarget = Frame;
+                menu.Placement = System.Windows.Controls.Primitives.PlacementMode.MousePoint;
+                // 和绳子上的卡片一样先把窗口拉到前台，菜单才能用键盘、点别处才会收起
+                WindowsNative.SetForegroundWindow(handle);
+                menu.IsOpen = true;
+            };
+        }
+
+        LightMenu BuildMenu()
+        {
+            var built = new LightMenu("贴图", "");
+            built.AddAction("复制图片", "copy", Copy);
+            built.AddAction("打开", "open", delegate { execute(ShotAction.Open); });
+            built.AddAction("编辑", "edit", delegate { execute(ShotAction.Edit); });
+            built.AddAction("保存副本…", "save", delegate { execute(ShotAction.Save); });
+            built.AddAction("打开位置", "folder", delegate { execute(ShotAction.Locate); });
+            built.Separator();
+            built.AddAction("挂回晾衣绳", "startup", ReturnToRope);
+            built.AddAction(managed ? "删除（移到回收站）" : "移除记录（保留原图）", "trash", Delete, false, true);
+            return built;
+        }
+
+        void Copy()
+        {
+            execute(ShotAction.Copy);
+            if (closed) return;
+            copiedHint.IsOpen = true;
+            copiedTimer.Stop(); copiedTimer.Start();
+        }
+
+        // 删除：贴图往下一沉、淡出，再交给和绳子上「移到回收站」同一个动作（成功后贴图窗口会被关掉）
+        void Delete()
+        {
+            if (deleting || returning) return;
+            deleting = true;
+            Frame.IsHitTestVisible = false; PinButton.IsEnabled = false;
+            var ease = new CubicEase { EasingMode = EasingMode.EaseIn };
+            paperLift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(28, TimeSpan.FromSeconds(0.18)) { EasingFunction = ease });
+            pinLift.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(22, TimeSpan.FromSeconds(0.18)) { EasingFunction = ease });
+            var fade = new DoubleAnimation(0, TimeSpan.FromSeconds(0.18));
+            fade.Completed += delegate
+            {
+                execute(ShotAction.Trash);
+                if (closed) return;
+                // 没删成（比如文件被占用，App 会弹提示）：贴图恢复原样
+                deleting = false;
+                Frame.IsHitTestVisible = true; PinButton.IsEnabled = true;
+                ((UIElement)Content).BeginAnimation(OpacityProperty, null);
+                paperLift.BeginAnimation(TranslateTransform.YProperty, null);
+                pinLift.BeginAnimation(TranslateTransform.YProperty, null);
+            };
+            ((UIElement)Content).BeginAnimation(OpacityProperty, fade);
         }
     }
 }
