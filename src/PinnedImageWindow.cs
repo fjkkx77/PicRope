@@ -35,6 +35,11 @@ namespace ScreenLine
         double pictureScale, dropStarted = -1;
         // 目标逻辑尺寸：先按它一次性改窗口位置和大小，再同步给 WPF 的 Width/Height，避免分三步改导致来回跳
         double logicalWidth, logicalHeight;
+        // 滚轮只改目标比例；每帧最多改一次窗口，当前比例平滑追向目标（快速连滚时多个事件并进同一帧）
+        double targetScale, lastZoomFrame = -1;
+        bool zoomAroundCursor;
+        Point zoomCursor;
+        const double ZoomTimeConstant = 0.06; // 秒：约 0.18 秒走完 95%，跟手又不突兀
         readonly ToolTip resetHint = new ToolTip { Content = "双击恢复原始大小", Style = LightTheme.HintStyle };
         int placedLeft = int.MinValue, placedTop = int.MinValue, placedWidth, placedHeight;
         bool moving, rendering, returning;
@@ -139,7 +144,7 @@ namespace ScreenLine
             Closed += delegate { CompositionTarget.Rendering -= Render; };
             bitmap = picture;
             photo.Source = bitmap;
-            pictureScale = FitScale(bitmap, screen);
+            pictureScale = targetScale = FitScale(bitmap, screen);
             double landingWidth = (bitmap.PixelWidth * pictureScale + 38) * dpi;
             double landingHeight = (bitmap.PixelHeight * pictureScale + 50) * dpi;
             landing = new Point(
@@ -165,7 +170,7 @@ namespace ScreenLine
 
         void UpdateResetHint()
         {
-            bool zoomed = Math.Abs(pictureScale - FitScale(bitmap, CurrentScreen())) > 1e-6;
+            bool zoomed = Math.Abs(targetScale - FitScale(bitmap, CurrentScreen())) > 1e-6;
             ToolTipService.SetIsEnabled(Frame, zoomed);
             if (!zoomed) resetHint.IsOpen = false;
         }
@@ -174,7 +179,8 @@ namespace ScreenLine
         void ResetSize()
         {
             if (returning || !IsHitTestVisible) return;
-            pictureScale = FitScale(bitmap, CurrentScreen());
+            targetScale = FitScale(bitmap, CurrentScreen());
+            zoomAroundCursor = false; // 以图钉为中心平滑缩回
             UpdateResetHint();
             StartRendering();
         }
@@ -212,7 +218,7 @@ namespace ScreenLine
             {
                 var screen = Forms.Screen.FromPoint(new System.Drawing.Point((int)anchor.X, (int)anchor.Y));
                 double dpi = WindowsNative.MonitorScale(screen);
-                pictureScale = Math.Min(pictureScale, Math.Min((screen.WorkingArea.Width / dpi - 40) / bitmap.PixelWidth,
+                pictureScale = targetScale = Math.Min(targetScale, Math.Min((screen.WorkingArea.Width / dpi - 40) / bitmap.PixelWidth,
                     (screen.WorkingArea.Height / dpi - 52) / bitmap.PixelHeight));
                 StartRendering();
             }
@@ -238,10 +244,12 @@ namespace ScreenLine
 
         void Render(object sender, EventArgs args)
         {
+            if (positioning) return; // 正在改窗口时插进来的帧直接跳过，等这次改完下一帧再走
             double now = clock.Elapsed.TotalSeconds;
             double elapsed = Math.Max(0, now - dropStarted);
             double t = Math.Min(1, elapsed / 0.40);
             double progress = t * t * t * (10 + t * (-15 + 6 * t));
+            if (IsHitTestVisible) StepZoom(now);
             logicalWidth = bitmap.PixelWidth * pictureScale + 38;
             logicalHeight = bitmap.PixelHeight * pictureScale + 50;
             zoom.ScaleX = (startWidth + 14) / (logicalWidth - 24) * (1 - progress) + progress;
@@ -257,14 +265,47 @@ namespace ScreenLine
                 if (elapsed >= 0.54) IsHitTestVisible = true;
             }
             Position();
-            if (IsHitTestVisible)
+            if (IsHitTestVisible && pictureScale == targetScale)
             {
-                rendering = false;
+                rendering = false; lastZoomFrame = -1;
                 CompositionTarget.Rendering -= Render;
             }
         }
 
+        // 每帧一步：当前比例按指数平滑追向目标（在对数空间插值，放大缩小同样匀速）；以光标为中心时同步算出新锚点
+        void StepZoom(double now)
+        {
+            if (pictureScale == targetScale) return;
+            double dt = lastZoomFrame < 0 ? 1 / 60.0 : Math.Max(0.001, Math.Min(0.05, now - lastZoomFrame));
+            lastZoomFrame = now;
+            double previous = pictureScale;
+            double k = 1 - Math.Exp(-dt / ZoomTimeConstant);
+            double next = Math.Exp(Math.Log(previous) + (Math.Log(targetScale) - Math.Log(previous)) * k);
+            if (Math.Abs(next - targetScale) <= targetScale * 0.002) next = targetScale;
+            pictureScale = next;
+            if (!zoomAroundCursor || placedWidth <= 0) return;
+            double dpi = WindowsNative.MonitorScale(CurrentScreen());
+            // 用不取整的锚点推算当前左上角，多次缩放不会累积取整误差
+            var exactTopLeft = new Point(anchor.X - placedWidth / 2.0, anchor.Y - 17 * dpi);
+            var topLeft = ZoomRules.AroundCursor(zoomCursor, exactTopLeft,
+                bitmap.PixelWidth * previous, bitmap.PixelHeight * previous, bitmap.PixelWidth * next, bitmap.PixelHeight * next, dpi);
+            double newWidth = Math.Round((bitmap.PixelWidth * next + 38) * dpi);
+            anchor = new Point(topLeft.X + newWidth / 2.0, topLeft.Y + 17 * dpi);
+        }
+
+        // 改窗口时 WPF 会同步重绘并在里面再触发一帧 Render；不防重入的话调用一层套一层，
+        // 退出时外层把早已过时的尺寸再设回去，窗口就被一路拉回缩小（实测嵌套二三十层、单次 791ms）
+        bool positioning;
+
         void Position()
+        {
+            if (positioning) return;
+            positioning = true;
+            try { PositionCore(); }
+            finally { positioning = false; }
+        }
+
+        void PositionCore()
         {
             var screen = IsHitTestVisible ? Forms.Screen.FromPoint(new System.Drawing.Point((int)anchor.X, (int)anchor.Y)) : display;
             double dpi = IsHitTestVisible ? WindowsNative.MonitorScale(screen) : displayScale;
@@ -293,21 +334,15 @@ namespace ScreenLine
             double dpi = WindowsNative.MonitorScale(screen);
             double maximum = Math.Min((screen.WorkingArea.Width / dpi - 40) / bitmap.PixelWidth,
                 (screen.WorkingArea.Height / dpi - 52) / bitmap.PixelHeight);
-            double previous = pictureScale;
-            pictureScale = Math.Max(Math.Min(0.08, maximum), Math.Min(maximum, pictureScale * Math.Pow(1.12, e.Delta / 120.0)));
-            if (pictureScale == previous) return;
+            // 只改目标比例（几乎不花时间），真正改窗口交给每帧的 StepZoom：快速连滚不会积压、也不会一格一跳
+            double next = Math.Max(Math.Min(0.08, maximum), Math.Min(maximum, targetScale * Math.Pow(1.12, e.Delta / 120.0)));
+            if (next == targetScale) return;
+            targetScale = next;
             var cursor = WindowsNative.Cursor();
             bool overPicture = cursor.X >= placedLeft && cursor.X < placedLeft + placedWidth && cursor.Y >= placedTop && cursor.Y < placedTop + placedHeight;
-            if (IsHitTestVisible && placedWidth > 0 && overPicture)
-            {
-                // 以光标为中心缩放：光标指着的那一点缩放后仍在光标下；光标不在贴图上时保持原版的「以图钉为中心」
-                // 用不取整的锚点推算当前左上角，多次缩放不会累积取整误差
-                var exactTopLeft = new Point(anchor.X - placedWidth / 2.0, anchor.Y - 17 * dpi);
-                var topLeft = ZoomRules.AroundCursor(new Point(cursor.X, cursor.Y), exactTopLeft,
-                    bitmap.PixelWidth * previous, bitmap.PixelHeight * previous, bitmap.PixelWidth * pictureScale, bitmap.PixelHeight * pictureScale, dpi);
-                double newWidth = Math.Round((bitmap.PixelWidth * pictureScale + 38) * dpi);
-                anchor = new Point(topLeft.X + newWidth / 2.0, topLeft.Y + 17 * dpi);
-            }
+            // 以光标为中心缩放：光标指着的那一点缩放后仍在光标下；光标不在贴图上时保持原版的「以图钉为中心」
+            zoomAroundCursor = IsHitTestVisible && placedWidth > 0 && overPicture;
+            zoomCursor = new Point(cursor.X, cursor.Y);
             UpdateResetHint();
             StartRendering();
         }
