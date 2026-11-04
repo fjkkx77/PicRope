@@ -145,6 +145,47 @@ namespace ScreenLine.Tests
                 gallery.Add(file, image);
                 Check(gallery.Items.Count == 1);
             });
+            Run("拖动排序：挪到前面、后面，顺序保存并在重启后恢复", delegate
+            {
+                var gallery = new Gallery(new StateStore(Path.Combine(root, "reorder-profile")));
+                foreach (var name in new[] { "甲.png", "乙.png", "丙.png", "丁.png" })
+                {
+                    string file = WritePicture(name, (byte)(40 + name[0] % 50));
+                    gallery.Add(file, ImageContent.Read(file));
+                }
+                var a = gallery.Items[0]; var b = gallery.Items[1]; var c = gallery.Items[2]; var d = gallery.Items[3];
+                int notified = 0; gallery.Changed += delegate { notified++; };
+                gallery.Move(d, a, false);
+                Check(gallery.Items.SequenceEqual(new[] { d, a, b, c }) && notified == 1);
+                gallery.Move(d, c, true);
+                Check(gallery.Items.SequenceEqual(new[] { a, b, c, d }) && notified == 2);
+                gallery.Move(b, c, true);
+                Check(gallery.Items.SequenceEqual(new[] { a, c, b, d }));
+                gallery.Move(a, a, false); gallery.Move(a, c, false);
+                Check(gallery.Items.SequenceEqual(new[] { a, c, b, d }) && notified == 3); // 原地不动不保存不通知
+                var restored = new StateStore(gallery.Store.Root).State.Images.Select(Path.GetFileName).ToArray();
+                Check(restored.SequenceEqual(new[] { "甲.png", "丙.png", "乙.png", "丁.png" }));
+            });
+            Run("拖动排序：越过相邻格中线才换格，两端夹住", delegate
+            {
+                // 4 张卡、内容宽 1000：第 0 格左边缘 = (1000 - 4×172)/2 = 156
+                Check(ReorderRules.TargetIndex(156, 4, 1000) == 0 && ReorderRules.TargetIndex(156 + 85, 4, 1000) == 0);
+                Check(ReorderRules.TargetIndex(156 + 86, 4, 1000) == 1 && ReorderRules.TargetIndex(156 + 3 * 172, 4, 1000) == 3);
+                Check(ReorderRules.TargetIndex(-500, 4, 1000) == 0 && ReorderRules.TargetIndex(5000, 4, 1000) == 3 && ReorderRules.TargetIndex(0, 0, 1000) == 0);
+            });
+            Run("拖动排序：横拖排序、竖拖拿走，单张不排序，拉离绳子改为拿走", delegate
+            {
+                Check(ReorderRules.StartsReorder(6, 2, 3) && ReorderRules.StartsReorder(-6, -6, 3));
+                Check(!ReorderRules.StartsReorder(2, 6, 3) && !ReorderRules.StartsReorder(6, 0, 1));
+                Check(!ReorderRules.PulledOut(56) && ReorderRules.PulledOut(57) && ReorderRules.PulledOut(-57));
+            });
+            Run("拖动排序：进边缘 64 像素自动滚，越深越快，中间不滚", delegate
+            {
+                Check(ReorderRules.EdgeSpeed(500, 1000) == 0 && ReorderRules.EdgeSpeed(64, 1000) == 0 && ReorderRules.EdgeSpeed(936, 1000) == 0);
+                Check(ReorderRules.EdgeSpeed(32, 1000) == -480 && ReorderRules.EdgeSpeed(0, 1000) == -960 && ReorderRules.EdgeSpeed(-50, 1000) == -960);
+                Check(ReorderRules.EdgeSpeed(968, 1000) == 480 && ReorderRules.EdgeSpeed(1200, 1000) == 960);
+                Check(ReorderRules.EdgeSpeed(10, 100) == 0);
+            });
             Run("只收集的图片不会挂上，取下后仍在图片篓", delegate
             {
                 var store = new StateStore(Path.Combine(root, "basket-profile"));
