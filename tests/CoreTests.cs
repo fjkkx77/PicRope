@@ -75,6 +75,13 @@ namespace ScreenLine.Tests
                 Check(RevealRules.InTopLeftCorner(-1920, 0, -1920, 0, 0, 0, 1) && !RevealRules.InTopLeftCorner(-1892, 0, -1920, 0, 0, 0, 1) && RevealRules.InTopLeftCorner(-1893, 0, -1920, 0, 0, 0, 1));
                 Check(RevealRules.InTopLeftCorner(5, 47, 0, 0, 1920, 48, 1) && !RevealRules.InTopLeftCorner(5, 48, 0, 0, 1920, 48, 1));
             });
+            Run("拖到绳子上的文件只接图片，去重且保持顺序", delegate
+            {
+                var accepted = DropRules.ImageFiles(new[] { "C:\\a.PNG", "C:\\说明.txt", "C:\\文件夹", "C:\\b.jpg", "c:\\A.png", "", "C:\\c.gif" });
+                Check(accepted.SequenceEqual(new[] { "C:\\a.PNG", "C:\\b.jpg", "C:\\c.gif" }));
+                Check(DropRules.ImageFiles(new[] { "C:\\a.zip", "C:\\b.docx" }).Length == 0);
+                Check(DropRules.ImageFiles(null).Length == 0 && DropRules.ImageFiles("不是文件列表").Length == 0);
+            });
             Run("同尺寸不同图片有不同指纹", delegate { Check(ImageContent.HashPixels(Picture(20)) != ImageContent.HashPixels(Picture(80))); });
             Run("同图片重新编码后指纹不变", delegate
             {

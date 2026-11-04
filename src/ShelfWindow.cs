@@ -74,6 +74,12 @@ namespace ScreenLine
         double lastScrollOffset;
         bool rendering;
         bool pinned, previousDown, suppressEdge, trackingScrollHover, avoidingCaption, switchingDisplay, displayMoveQueued;
+        // 拖文件上绳：按下时不在图绳控件上、且正拖过图绳区域时，才临时接住鼠标和拖放
+        bool pressedOutside, catchingDrops;
+        Grid root;
+        static readonly Brush DropCatcher = new SolidColorBrush(Color.FromArgb(2, 255, 255, 255));
+        readonly Border dropHint = new Border();
+        public event Action<string[]> FilesDropped;
         int displaySwitchVersion;
         string viewingName;
         IntPtr viewingWindow;
@@ -152,7 +158,7 @@ namespace ScreenLine
                 }
                 e.Handled = true;
             };
-            var root = new Grid();
+            root = new Grid();
             line.Margin = new Thickness(24, 0, 24, 0); line.RenderTransform = slide; line.IsHitTestVisible = false;
             line.Children.Add(rope); root.Children.Add(line);
             root.Children.Add(viewport); Content = root;
@@ -229,6 +235,25 @@ namespace ScreenLine
             hint.Effect = new DropShadowEffect { BlurRadius = 16, ShadowDepth = 3, Opacity = 0.18 };
             content.Children.Add(hint);
 
+            dropHint.Child = new TextBlock { Text = "松手挂上绳子", FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = LightTheme.Brush("#20408E") };
+            dropHint.Background = Brushes.White; dropHint.BorderBrush = LightTheme.Brush("#9DB4E6"); dropHint.BorderThickness = new Thickness(1);
+            dropHint.CornerRadius = new CornerRadius(14); dropHint.Padding = new Thickness(14, 5, 14, 6);
+            dropHint.Effect = new DropShadowEffect { BlurRadius = 10, ShadowDepth = 2, Opacity = 0.18 };
+            dropHint.HorizontalAlignment = HorizontalAlignment.Center; dropHint.VerticalAlignment = VerticalAlignment.Bottom;
+            dropHint.Margin = new Thickness(0, 0, 0, 6); dropHint.IsHitTestVisible = false; dropHint.Visibility = Visibility.Collapsed;
+            dropHint.RenderTransform = slide;
+            root.Children.Add(dropHint);
+            AllowDrop = true;
+            DragEnter += DragFiles; DragOver += DragFiles;
+            DragLeave += delegate { dropHint.Visibility = Visibility.Collapsed; };
+            Drop += delegate(object sender, DragEventArgs e)
+            {
+                dropHint.Visibility = Visibility.Collapsed;
+                string[] images = pressedOutside ? DropRules.ImageFiles(e.Data.GetData(DataFormats.FileDrop)) : new string[0];
+                e.Effects = images.Length > 0 ? DragDropEffects.Copy : DragDropEffects.None; e.Handled = true;
+                if (images.Length > 0 && FilesDropped != null) FilesDropped(images);
+            };
+
             SourceInitialized += delegate
             {
                 Handle = new WindowInteropHelper(this).Handle;
@@ -258,6 +283,25 @@ namespace ScreenLine
                 foreach (var card in cards.Values) card.Dispose();
             };
             Update();
+        }
+
+        void DragFiles(object sender, DragEventArgs e)
+        {
+            // 只接从别处拖来的图片；图绳自己拖出的卡片、非图片文件都显示「禁止」
+            bool images = pressedOutside && e.Data.GetDataPresent(DataFormats.FileDrop) && DropRules.ImageFiles(e.Data.GetData(DataFormats.FileDrop)).Length > 0;
+            e.Effects = images ? DragDropEffects.Copy : DragDropEffects.None;
+            dropHint.Visibility = images ? Visibility.Visible : Visibility.Collapsed;
+            if (images) awaySince = DateTime.MaxValue;
+            e.Handled = true;
+        }
+
+        // 拖着文件经过图绳时，给整条区域铺一层几乎透明的底色：分层窗口只有不透明像素才能接住鼠标和拖放
+        void CatchDrops(bool catching)
+        {
+            if (catching == catchingDrops) return;
+            catchingDrops = catching;
+            root.Background = catching ? DropCatcher : null;
+            if (!catching) dropHint.Visibility = Visibility.Collapsed;
         }
 
         IntPtr Messages(IntPtr window, int message, IntPtr w, IntPtr l, ref bool handled)
@@ -639,6 +683,7 @@ namespace ScreenLine
                 basketMotion.Snap(0); basketTurn.Angle = 0;
                 basketCounterMotion.Snap(1); basketCounterScale.ScaleX = basketCounterScale.ScaleY = 1;
                 envelopeImage.Reset();
+                CatchDrops(false);
                 WindowsNative.PassMouse(Handle, true);
             }
             else
@@ -749,6 +794,10 @@ namespace ScreenLine
             var now = DateTime.UtcNow;
             bool viewing = ViewingImage(now);
             bool busy = cards.Values.Any(c => c.Busy);
+            // 按下的那一刻不在图绳自己的控件上 → 这次按住拖动的是别处的东西（可能是文件），允许拖到绳子上
+            // 只在新的一次按下时更新；松手时不清，免得轮询抢在「放下」之前把标记清掉
+            if (down && !previousDown) pressedOutside = !over;
+            bool draggingIn = down && pressedOutside && !WindowsNative.MovingWindow();
             if (!nearTop) suppressEdge = false;
             if (nearTop && down && !previousDown && !over && !viewing)
             {
@@ -799,7 +848,7 @@ namespace ScreenLine
                     && cursor.Y >= Display.WorkingArea.Top && cursor.Y < Display.WorkingArea.Top + 220 * WindowsNative.MonitorScale(Display))
                     Reveal(true, false, 0);
             }
-            if (gallery.Store.State.RevealOnTopHover && nearCorner && !down && !suppressEdge && !WindowsNative.FullScreen(screen, Handle))
+            if (gallery.Store.State.RevealOnTopHover && nearCorner && (!down || draggingIn) && !suppressEdge && !WindowsNative.FullScreen(screen, Handle))
             {
                 if (edgeSince == DateTime.MaxValue) edgeSince = now;
                 if (now - edgeSince >= TimeSpan.FromMilliseconds(320) && (!Revealed || screen.DeviceName != Display.DeviceName))
@@ -815,7 +864,11 @@ namespace ScreenLine
             }
             else edgeSince = DateTime.MaxValue;
             if (WindowsNative.FullScreen(Display, Handle)) { Reveal(false, false, 0); return; }
-            WindowsNative.PassMouse(Handle, !Revealed || (!over && !busy));
+            WindowsNative.Rectangle band;
+            WindowsNative.GetWindowRect(Handle, out band);
+            bool overBand = cursor.X >= band.Left && cursor.X < band.Right && cursor.Y >= band.Top && cursor.Y < band.Bottom;
+            CatchDrops(Revealed && draggingIn && overBand);
+            WindowsNative.PassMouse(Handle, !Revealed || (!over && !busy && !catchingDrops));
             if (!Revealed) return;
             if (!rendering && NeedsRendering) StartRendering();
             if (cards.Count > 0 && Math.Abs(scrollMotion.Velocity) < 8 && Math.Abs(scrollMotion.Target - viewport.HorizontalOffset) < 0.5 && !busy && now >= nextGust)

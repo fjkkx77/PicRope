@@ -18,6 +18,18 @@ namespace ScreenLine
         [StructLayout(LayoutKind.Sequential)]
         public struct Rectangle { public int Left, Top, Right, Bottom; }
 
+        [StructLayout(LayoutKind.Sequential)]
+        struct GuiThreadInfo { public int Size, Flags; public IntPtr Active, Focus, Capture, MenuOwner, MoveSize, Caret; public Rectangle CaretRect; }
+        [DllImport("user32.dll")] static extern bool GetGUIThreadInfo(uint thread, ref GuiThreadInfo info);
+
+        // 前台窗口正在被拖动或调整大小（系统移动/缩放循环，GUI_INMOVESIZE）。
+        // 用来区分「拖窗口到角落贴靠」和「拖着文件」：前者不展开图绳，免得挡住 Windows 的角落贴靠。
+        public static bool MovingWindow()
+        {
+            var info = new GuiThreadInfo { Size = Marshal.SizeOf(typeof(GuiThreadInfo)) };
+            return GetGUIThreadInfo(0, ref info) && ((info.Flags & 0x2) != 0 || info.MoveSize != IntPtr.Zero);
+        }
+
         [DllImport("user32.dll")] public static extern bool GetCursorPos(out Point point);
         [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int key);
         [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();

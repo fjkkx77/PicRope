@@ -162,6 +162,17 @@ namespace ScreenLine
         }
     }
 
+    internal static class DropRules
+    {
+        // 拖到绳子上的文件只接图片；文件夹、其他文件一律跳过。没有可用图片时返回空数组，界面据此显示「禁止」。
+        public static string[] ImageFiles(object data)
+        {
+            var files = data as string[];
+            if (files == null) return new string[0];
+            return files.Where(file => !string.IsNullOrWhiteSpace(file) && FileRules.IsImage(file)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+    }
+
     internal static class FileRules
     {
         static readonly string[] extensions = { ".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff" };
