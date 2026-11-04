@@ -94,6 +94,8 @@ namespace ScreenLine.Tests
                 using (var file = File.Create(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "update-window.png"))) encoder.Save(file);
                 var install = (Button)typeof(UpdateWindow).GetField("install", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(window);
                 int downloads = handler.Downloads;
+                install.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                Check((string)install.Content == "仍然安装官方版" && handler.Downloads == downloads, "定制版第一次点击只要求确认，不开始下载");
                 install.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Until(() => install.IsEnabled && (string)install.Content == "重启并安装");
                 install.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); await Until(() => install.IsEnabled);
                 Check(handler.Downloads == downloads + 1, "用户取消关闭未保存图片后可继续安装，不重复下载");

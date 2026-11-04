@@ -25,6 +25,9 @@ namespace ScreenLine
         public const string Endpoint = "https://api.github.com/repos/Renly1994/PicRope/releases/latest";
         public static readonly string CurrentVersion = Assembly.GetExecutingAssembly().GetCustomAttributes(typeof(AssemblyInformationalVersionAttribute), false)
             .Cast<AssemblyInformationalVersionAttribute>().Single().InformationalVersion;
+        // 本机定制版：界面上显示的版本号带「定制版」，版本比较、请求头仍用 CurrentVersion
+        public const string CustomLabel = "定制版";
+        public static readonly string DisplayVersion = CurrentVersion + " " + CustomLabel;
         internal static readonly string Cache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PicRope", "Updates");
         readonly HttpClient client;
 
