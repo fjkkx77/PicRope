@@ -91,6 +91,38 @@ namespace ScreenLine.Tests
             var wechatMany = new DataObject(); wechatMany.SetData(DataFormats.FileDrop, new[] { "C:\\a.jpg", "C:\\b.jpg" });
             wechatMany.SetData("DeviceIndependentBitmap", new byte[] { 1 }); wechatMany.SetData("image/png", new byte[] { 1 });
             Check(!ClipboardRules.IsImage(wechatMany, "Weixin"), "多文件复制不误认为单张图片");
+            // PixPin 2.x 复制截图时的实际格式（2026-11-04 实测）：位图 + Qt 命名的 PNG + 截图文件，没有文字
+            Func<DataObject> screenshotTool = delegate
+            {
+                var clip = new DataObject(); clip.SetData(DataFormats.FileDrop, new[] { "C:\\PixPin_2026-11-04.png" });
+                clip.SetData("DeviceIndependentBitmap", new byte[] { 1 }); clip.SetData("Format17", new byte[] { 1 });
+                clip.SetData("application/x-qt-windows-mime;value=\"PNG\"", new byte[] { 1 }); clip.SetData("PixPinData", new byte[] { 1 });
+                return clip;
+            };
+            string toolFile;
+            Check(ClipboardRules.IsImage(screenshotTool(), "PixPin", out toolFile), "截图软件同时放入位图和截图文件时可收集");
+            Check(toolFile == null, "截图软件的图片按位图读取，不依赖它的截图文件");
+            Check(ClipboardRules.IsImage(screenshotTool(), "QQ"), "不限定截图软件名称");
+            Check(!ClipboardRules.IsImage(screenshotTool(), "explorer"), "资源管理器即使带位图也不把文件当截图");
+            Check(!ClipboardRules.IsImage(screenshotTool(), "Explorer"), "资源管理器名称不区分大小写");
+            Check(!ClipboardRules.IsImage(screenshotTool(), null), "无法确认来源时不把带文件的复制当截图");
+            var toolText = screenshotTool(); toolText.SetData(DataFormats.UnicodeText, "文字");
+            Check(!ClipboardRules.IsImage(toolText, "PixPin"), "带文字的文件复制不当截图");
+            var toolHtml = screenshotTool(); toolHtml.SetData(DataFormats.Html, "<img src='a.png'>");
+            Check(!ClipboardRules.IsImage(toolHtml, "PixPin"), "带网页内容的文件复制不当截图");
+            var toolNoBitmap = new DataObject(); toolNoBitmap.SetData(DataFormats.FileDrop, new[] { "C:\\a.png" }); toolNoBitmap.SetData("PNG", new byte[] { 1 });
+            Check(!ClipboardRules.IsImage(toolNoBitmap, "PixPin"), "没有原始位图、只有文件时仍按文件复制处理");
+            var toolZip = screenshotTool(); toolZip.SetData(DataFormats.FileDrop, new[] { "C:\\file.zip" });
+            Check(!ClipboardRules.IsImage(toolZip, "PixPin"), "带位图的普通文件不当截图");
+            var toolMany = screenshotTool(); toolMany.SetData(DataFormats.FileDrop, new[] { "C:\\a.png", "C:\\b.png" });
+            Check(!ClipboardRules.IsImage(toolMany, "PixPin"), "多文件复制不当截图");
+            var toolOwn = screenshotTool(); toolOwn.SetData(ClipboardRules.OwnFormat, "1");
+            Check(!ClipboardRules.IsImage(toolOwn, "PicRope"), "图绳自己带文件的复制不重复收集");
+            var toolPixels = new DataObject();
+            var toolBitmap = BitmapSource.Create(2, 2, 96, 96, PixelFormats.Bgra32, null, new byte[] { 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255 }, 8);
+            toolBitmap.Freeze(); toolPixels.SetImage(toolBitmap); toolPixels.SetData(DataFormats.FileDrop, new[] { "C:\\不存在的截图文件.png" });
+            var toolPicture = CapturePipeline.ReadImage(toolPixels, "PixPin").GetAwaiter().GetResult();
+            Check(toolPicture != null && toolPicture.Extension == ".png" && ImageContent.Decode(toolPicture.Bytes).PixelWidth == 2, "截图软件的位图可读取，截图文件不存在也不影响");
             string fixture = Path.Combine(Path.GetTempPath(), "picrope-clipboard-" + Guid.NewGuid().ToString("N") + ".png");
             try
             {

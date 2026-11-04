@@ -207,8 +207,12 @@ namespace ScreenLine
 
         static bool HasImage(HashSet<string> formats)
         {
-            return formats.Contains("Bitmap") || formats.Contains("DeviceIndependentBitmap") || formats.Contains("Format17")
-                || EncodedFormats.Any(format => formats.Contains(format.Key));
+            return HasPixels(formats) || EncodedFormats.Any(format => formats.Contains(format.Key));
+        }
+
+        static bool HasPixels(HashSet<string> formats)
+        {
+            return formats.Contains("Bitmap") || formats.Contains("DeviceIndependentBitmap") || formats.Contains("Format17");
         }
 
         public static bool IsImage(IDataObject data) { return IsImage(data, null); }
@@ -228,11 +232,17 @@ namespace ScreenLine
             if (formats.Contains("FileDrop"))
             {
                 bool wechat = string.Equals(source, "Weixin", StringComparison.OrdinalIgnoreCase) || string.Equals(source, "WeChat", StringComparison.OrdinalIgnoreCase);
-                if (!wechat || !formats.Contains("image/png") || !formats.Contains("DeviceIndependentBitmap")
+                bool wechatImage = wechat && formats.Contains("image/png") && formats.Contains("DeviceIndependentBitmap");
+                // PixPin、QQ 等截图软件复制截图时会同时放入原始位图和一份截图文件。
+                // 资源管理器复制图片文件时没有原始位图，所以「有位图 + 来源可确认且不是资源管理器」才按截图收集，并读取位图而非文件。
+                bool screenshotTool = !wechat && HasPixels(formats) && !string.IsNullOrEmpty(source)
+                    && !string.Equals(source, "explorer", StringComparison.OrdinalIgnoreCase);
+                if ((!wechatImage && !screenshotTool)
                     || formats.Contains("HTML Format") || formats.Contains("Rich Text Format") || formats.Contains("UnicodeText") || formats.Contains("Text") || formats.Contains("System.String")) return false;
                 var files = data.GetData(DataFormats.FileDrop) as string[];
                 if (files == null || files.Length != 1 || !FileRules.IsImage(files[0])) return false;
-                imageFile = files[0]; return true;
+                if (wechatImage) imageFile = files[0];
+                return true;
             }
             if (formats.Contains("Rich Text Format") || !formats.Contains("HTML Format") || !HasImage(formats)) return false;
             string html = data.GetData(DataFormats.Html) as string;
